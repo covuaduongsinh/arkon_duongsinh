@@ -83,9 +83,12 @@ export function ProviderConfigCard({
         <div className="flex flex-col gap-1.5">
           <Label className="text-xs">API Key</Label>
           <Input
-            type="password"
+            type={apiKey.includes("•") ? "text" : "password"}
             value={apiKey}
             onChange={(e) => onApiKeyChange(e.target.value)}
+            onFocus={() => {
+              if (apiKey.includes("•")) onApiKeyChange("");
+            }}
             placeholder="sk-..."
             className="bg-background"
           />

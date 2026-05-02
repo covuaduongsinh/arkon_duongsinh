@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +46,7 @@ export function KnowledgeTypeDialog({
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const colorInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (knowledgeType) {
@@ -119,12 +120,31 @@ export function KnowledgeTypeDialog({
                   style={{ backgroundColor: c }}
                 />
               ))}
-              <Input
-                type="color"
-                value={color}
-                onChange={(e) => setColor(e.target.value)}
-                className="w-7 h-7 p-0 border-0 cursor-pointer"
-              />
+              <div className="relative w-7 h-7">
+                <button
+                  type="button"
+                  onClick={() => colorInputRef.current?.click()}
+                  className="w-7 h-7 rounded-full p-[2px] transition-all hover:scale-110 cursor-pointer"
+                  style={{
+                    background:
+                      "conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
+                  }}
+                  title="Pick custom color"
+                >
+                  <span className="w-full h-full rounded-full bg-background flex items-center justify-center">
+                    <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: "14px" }}>
+                      add
+                    </span>
+                  </span>
+                </button>
+                <input
+                  ref={colorInputRef}
+                  type="color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                  className="absolute inset-0 opacity-0 pointer-events-none"
+                />
+              </div>
             </div>
           </div>
 
