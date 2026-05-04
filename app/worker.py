@@ -51,21 +51,21 @@ class ProgressTracker:
 # Ingestion tasks
 # ---------------------------------------------------------------------------
 
-async def ingest_file_task(ctx: dict, source_id: str, file_data: bytes, file_name: str):
+async def ingest_file_task(ctx: dict, source_id: str):
     """
     arq task: full file ingestion → wiki compilation.
-    Steps: upload → extract text → vision captions → outline → compile wiki.
+    Steps: download from MinIO → extract text → vision captions → outline → compile wiki.
+    File must already be uploaded to MinIO before this task is enqueued.
     """
     from app.database import async_session_factory
     from app.database.models import KnowledgeType, Source
     from app.ai.registry import ProviderRegistry
-    from app.ai.wiki_compiler import compile_source_into_wiki
+    from app.ai.wiki_agent import compile_source_with_agent
     from app.services.image_service import extract_images
     from app.services.source_outline import assemble_full_text, build_outline
     from app.services.storage_service import storage_service
     from app.services.kb_service import (
         _extract_text_from_file,
-        _guess_content_type,
         _inline_image_captions,
     )
 
@@ -76,39 +76,34 @@ async def ingest_file_task(ctx: dict, source_id: str, file_data: bytes, file_nam
         source = await session.get(Source, sid)
         if not source:
             raise ValueError(f"Source {source_id} not found")
+        if not source.minio_key:
+            raise ValueError(f"Source {source_id} has no file in storage")
+
+        file_name = source.file_name or source.minio_key.split("/")[-1]
 
         try:
             source.status = "processing"
             source.progress = 0
-            source.progress_message = "Bắt đầu xử lý..."
+            source.progress_message = "Starting processing..."
             await session.commit()
 
-            # --- Step 1: Upload to MinIO (10%) ---
-            await tracker.update(5, "Đang tải lên...")
-            minio_key = f"sources/{source_id}/original/{file_name}"
-            storage_service.upload_file(
-                object_name=minio_key,
-                data=file_data,
-                content_type=_guess_content_type(file_name),
-            )
-            source.minio_key = minio_key
-            source.file_name = file_name
-            source.file_size = len(file_data)
-            await session.commit()
-            await tracker.update(10, "Tải lên hoàn tất")
+            # --- Step 1: Download from MinIO (10%) ---
+            await tracker.update(5, "Loading file...")
+            file_data = storage_service.download_file(source.minio_key)
+            await tracker.update(10, "File loaded")
 
             # --- Step 2: Extract text per page (25%) ---
-            await tracker.update(15, "Đang trích xuất văn bản (theo trang)...")
+            await tracker.update(15, "Extracting text (per page)...")
             pages_data = await _extract_text_from_file(file_data, file_name)
 
             if not pages_data or not any((p.get("content") or "").strip() for p in pages_data):
                 source.status = "error"
-                source.error_message = "Không thể trích xuất nội dung văn bản"
+                source.error_message = "Unable to extract text content"
                 source.progress = 0
                 await session.commit()
                 return {"status": "error", "message": "No text content"}
 
-            await tracker.update(25, "Trích xuất văn bản hoàn tất")
+            await tracker.update(25, "Text extraction complete")
 
             # --- Step 3: Extract images + vision captions (40%) ---
             await tracker.update(30, "Extracting and analyzing images...")
@@ -149,26 +144,33 @@ async def ingest_file_task(ctx: dict, source_id: str, file_data: bytes, file_nam
                 if kt:
                     kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
 
-            # --- Step 6: Compile into wiki (95%) ---
-            await tracker.update(55, "Compiling into wiki (LLM)...")
-            result = await compile_source_into_wiki(
+            # --- Step 6: Compile into wiki via mini-agent (55-95%) ---
+            await tracker.update(55, "Compiling into wiki (agent)...")
+
+            async def emit(step: int, message: str) -> None:
+                progress = min(95, 55 + step)
+                await tracker.update(progress, f"Compiling: {message}")
+
+            result = await compile_source_with_agent(
                 session=session,
                 source=source,
                 full_text=full_text,
-                knowledge_type_slug=kt_slug,
-                knowledge_type_name=kt_name,
-                knowledge_type_description=kt_desc,
+                kt_slug=kt_slug,
+                kt_name=kt_name,
+                kt_desc=kt_desc,
+                on_progress=emit,
             )
             await session.commit()
             await tracker.update(
                 95,
-                f"Wiki: +{result['pages_created']} pages, ~{result['pages_updated']} updated",
+                f"Wiki: +{result['pages_created']} pages, ~{result['pages_updated']} updated "
+                f"({result['tool_calls']} tool calls)",
             )
 
             # --- Done (100%) ---
             source.status = "ready"
             source.progress = 100
-            source.progress_message = "Hoàn tất"
+            source.progress_message = "Done"
             source.error_message = None
             await session.commit()
 
@@ -188,7 +190,7 @@ async def ingest_file_task(ctx: dict, source_id: str, file_data: bytes, file_nam
             source.status = "error"
             source.error_message = str(e)[:500]
             source.progress = 0
-            source.progress_message = f"Lỗi: {str(e)[:200]}"
+            source.progress_message = f"Error: {str(e)[:200]}"
             await session.commit()
             raise
 
@@ -197,7 +199,7 @@ async def ingest_url_task(ctx: dict, source_id: str):
     """arq task: URL ingestion → wiki compilation."""
     from app.database import async_session_factory
     from app.database.models import KnowledgeType, Source
-    from app.ai.wiki_compiler import compile_source_into_wiki
+    from app.ai.wiki_agent import compile_source_with_agent
     from app.services.kb_service import _extract_text_from_url
     from app.services.source_outline import assemble_full_text, build_outline
 
@@ -214,12 +216,17 @@ async def ingest_url_task(ctx: dict, source_id: str):
             source.progress = 0
             await session.commit()
 
-            await tracker.update(15, "Đang tải nội dung từ URL...")
+            await tracker.update(15, "Fetching content from URL...")
+            if not source.url:
+                source.status = "error"
+                source.error_message = "Source has no URL"
+                await session.commit()
+                return {"status": "error"}
             pages_data = await _extract_text_from_url(source.url)
 
             if not pages_data or not any((p.get("content") or "").strip() for p in pages_data):
                 source.status = "error"
-                source.error_message = "Không thể tải nội dung từ URL"
+                source.error_message = "Unable to fetch content from URL"
                 await session.commit()
                 return {"status": "error"}
 
@@ -236,20 +243,26 @@ async def ingest_url_task(ctx: dict, source_id: str):
                 if kt:
                     kt_slug, kt_name, kt_desc = kt.slug, kt.name, kt.description
 
-            await tracker.update(55, "Compiling into wiki (LLM)...")
-            result = await compile_source_into_wiki(
+            await tracker.update(55, "Compiling into wiki (agent)...")
+
+            async def emit(step: int, message: str) -> None:
+                progress = min(95, 55 + step)
+                await tracker.update(progress, f"Compiling: {message}")
+
+            result = await compile_source_with_agent(
                 session=session,
                 source=source,
                 full_text=full_text,
-                knowledge_type_slug=kt_slug,
-                knowledge_type_name=kt_name,
-                knowledge_type_description=kt_desc,
+                kt_slug=kt_slug,
+                kt_name=kt_name,
+                kt_desc=kt_desc,
+                on_progress=emit,
             )
             await session.commit()
 
             source.status = "ready"
             source.progress = 100
-            source.progress_message = "Hoàn tất"
+            source.progress_message = "Done"
             source.error_message = None
             await session.commit()
 
@@ -282,7 +295,6 @@ async def reingest_file_task(ctx: dict, source_id: str, force: bool = False):
     """
     from app.database import async_session_factory
     from app.database.models import Source
-    from app.services.storage_service import storage_service
     from app.services import wiki_service
 
     sid = uuid.UUID(source_id)
@@ -297,10 +309,7 @@ async def reingest_file_task(ctx: dict, source_id: str, force: bool = False):
             await wiki_service.regenerate_index(session)
             await session.commit()
 
-        file_data = storage_service.download_file(source.minio_key)
-        file_name = source.file_name or source.minio_key.split("/")[-1]
-
-    await ingest_file_task(ctx, source_id, file_data, file_name)
+    await ingest_file_task(ctx, source_id)
 
 
 # ---------------------------------------------------------------------------

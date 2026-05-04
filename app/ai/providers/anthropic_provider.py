@@ -6,6 +6,12 @@ Supports: Claude Sonnet, Claude Haiku, Claude Opus, etc.
 
 from typing import Optional
 
+from app.ai.agent_protocol import (
+    AssistantTurn,
+    ToolCall,
+    neutral_to_anthropic_messages,
+    openai_tools_to_anthropic,
+)
 from app.ai.providers.base import LLMProvider, ProviderConfig
 
 
@@ -44,6 +50,47 @@ class AnthropicLLM(LLMProvider):
 
         response = await self.client.messages.create(**kwargs)
         return response.content[0].text if response.content else ""
+
+    async def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: Optional[str] = None,
+        max_tokens: int = 8192,
+        temperature: float = 0.2,
+    ) -> AssistantTurn:
+        anthropic_messages = neutral_to_anthropic_messages(messages)
+        anthropic_tools = openai_tools_to_anthropic(tools)
+
+        kwargs: dict = {
+            "model": self.config.model_id,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": anthropic_messages,
+            "tools": anthropic_tools,
+        }
+        if system:
+            kwargs["system"] = system
+
+        response = await self.client.messages.create(**kwargs)
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                args = block.input if isinstance(block.input, dict) else {}
+                tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=args))
+
+        reason_map = {"end_turn": "end_turn", "tool_use": "tool_use", "max_tokens": "max_tokens"}
+        finish_reason = reason_map.get(response.stop_reason or "end_turn", "end_turn")
+
+        return AssistantTurn(
+            text="\n".join(text_parts) or None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+        )
 
     async def test_connection(self) -> tuple[bool, str]:
         try:

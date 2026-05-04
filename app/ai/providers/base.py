@@ -8,7 +8,10 @@ interfaces so the rest of the codebase never imports a specific SDK.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from app.ai.agent_protocol import AssistantTurn
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +101,24 @@ class LLMProvider(ABC):
     ) -> str:
         """Generate a text completion."""
         ...
+
+    async def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: Optional[str] = None,
+        max_tokens: int = 8192,
+        temperature: float = 0.2,
+    ) -> "AssistantTurn":
+        """
+        Multi-turn tool-calling. Messages use neutral format from agent_protocol.
+        Returns AssistantTurn with tool_calls (if any) and finish_reason.
+        Override in providers that support tool calling.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support tool calling. "
+            "Configure a provider that supports function calling (Anthropic, OpenAI, Google)."
+        )
 
     @abstractmethod
     async def test_connection(self) -> tuple[bool, str]:

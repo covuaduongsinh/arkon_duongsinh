@@ -205,11 +205,12 @@ async def upload_source(
     user: Employee = require_permission("kb.upload"),
 ):
     file_data = await file.read()
+    file_name = file.filename or "unknown"
     repo = Repository(db)
     source = Source(
         title=title or file.filename,
         source_type="file",
-        file_name=file.filename,
+        file_name=file_name,
         file_size=len(file_data),
         status="pending",
         progress=0,
@@ -222,9 +223,24 @@ async def upload_source(
     await db.commit()
     await db.refresh(source)
 
+    # Upload to MinIO before enqueuing so the worker downloads from storage
+    # rather than receiving raw bytes through Redis (msgpack has size limits
+    # and large binaries get corrupted in transit).
+    from app.services.storage_service import storage_service
+    from app.services.kb_service import _guess_content_type
+    minio_key = f"sources/{source.id}/original/{file_name}"
+    storage_service.upload_file(
+        object_name=minio_key,
+        data=file_data,
+        content_type=_guess_content_type(file_name),
+    )
+    source.minio_key = minio_key
+    source.file_name = file_name
+    await db.commit()
+
     pool = await get_arq_pool()
     job = await pool.enqueue_job(
-        "ingest_file_task", str(source.id), file_data, file.filename or "unknown",
+        "ingest_file_task", str(source.id),
     )
     source.job_id = job.job_id
     await db.commit()
@@ -389,9 +405,10 @@ async def delete_source(
     except Exception as e:
         logger.warning(f"Failed to clean MinIO files for source {source_id}: {e}")
 
-    # Detach from wiki — orphan pages are removed.
+    # Detach from wiki — orphan pages are removed, then rebuild index.
     from app.services import wiki_service
     await wiki_service.detach_source_from_wiki(db, source_id)
+    await wiki_service.regenerate_index(db)
 
     await repo.delete_by_id(Source, source_id)
     return {"deleted": True}

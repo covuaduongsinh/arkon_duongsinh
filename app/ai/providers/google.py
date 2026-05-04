@@ -8,10 +8,17 @@ Supports:
 """
 
 import asyncio
+import uuid
 from typing import Optional
 
 from loguru import logger
 
+from app.ai.agent_protocol import (
+    AssistantTurn,
+    ToolCall,
+    neutral_to_gemini_contents,
+    openai_tools_to_gemini,
+)
 from app.ai.providers.base import (
     EmbeddingProvider,
     LLMProvider,
@@ -137,6 +144,66 @@ class GoogleLLM(LLMProvider):
             ),
         )
         return response.text or ""
+
+    async def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: Optional[str] = None,
+        max_tokens: int = 8192,
+        temperature: float = 0.2,
+    ) -> AssistantTurn:
+        from google.genai import types as gtypes
+
+        contents = neutral_to_gemini_contents(messages)
+        gemini_tools = openai_tools_to_gemini(tools)
+
+        config = gtypes.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+            tools=gemini_tools,
+            tool_config=gtypes.ToolConfig(
+                function_calling_config=gtypes.FunctionCallingConfig(mode="AUTO")
+            ),
+        )
+
+        response = await self.client.aio.models.generate_content(
+            model=self.config.model_id,
+            contents=contents,
+            config=config,
+        )
+
+        text_parts: list[str] = []
+        tool_calls: list[ToolCall] = []
+
+        if response.candidates:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "text") and part.text:
+                    text_parts.append(part.text)
+                elif hasattr(part, "function_call") and part.function_call:
+                    fc = part.function_call
+                    args = dict(fc.args) if fc.args else {}
+                    # Gemini doesn't assign IDs — generate a stable one
+                    tc_id = f"fc_{fc.name}_{uuid.uuid4().hex[:8]}"
+                    tool_calls.append(ToolCall(id=tc_id, name=fc.name, arguments=args))
+
+        finish_reason = "tool_use" if tool_calls else "end_turn"
+        if response.candidates:
+            fr = str(response.candidates[0].finish_reason or "")
+            if "MAX_TOKENS" in fr:
+                finish_reason = "max_tokens"
+
+        # Store raw Gemini Content so neutral_to_gemini_contents can replay it
+        # with thought_signature intact (required by gemini-2.5 thinking models).
+        raw_content = response.candidates[0].content if response.candidates else None
+
+        return AssistantTurn(
+            text="\n".join(text_parts) or None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            raw_provider_content=raw_content,
+        )
 
     async def test_connection(self) -> tuple[bool, str]:
         try:

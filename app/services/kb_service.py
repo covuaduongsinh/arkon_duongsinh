@@ -226,28 +226,41 @@ async def _extract_text_from_file(file_data: bytes, file_name: str) -> list[dict
         doc.close()
         return pages_data
 
-    if ext == "docx":
+    if ext in ("docx", "doc"):
         import io
-        from docx import Document
-        doc = Document(io.BytesIO(file_data))
-        text = "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        return [{"content": text, "page_number": 1}]
+        import mammoth
+        result = mammoth.extract_raw_text(io.BytesIO(file_data))
+        return [{"content": result.value or "", "page_number": 1}]
 
     if ext in ("txt", "md", "csv"):
         return [{"content": file_data.decode("utf-8", errors="ignore"), "page_number": 1}]
 
-    # Other formats: fall back to content-core (markdown output preserves headings)
+    # Other formats (doc, xlsx, pptx, ...): write to a temp file and let
+    # content-core extract via file path. Passing raw bytes as "content"
+    # doesn't work for binary formats — content-core expects a string there.
+    import os
+    import tempfile
+
     try:
         from content_core import extract_content
-        result = await extract_content({
-            "file_path": None,
-            "content": file_data,
-            "output_format": "markdown",
-        })
-        return [{"content": result.content or "", "page_number": 1}]
+        suffix = f".{ext}" if ext else ""
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file_data)
+            tmp_path = tmp.name
+        try:
+            result = await extract_content({
+                "file_path": tmp_path,
+                "output_format": "markdown",
+            })
+            return [{"content": result.content or "", "page_number": 1}]
+        finally:
+            os.unlink(tmp_path)
     except Exception as e:
-        logger.warning(f"content-core extraction failed: {e}")
-        return [{"content": file_data.decode("utf-8", errors="ignore"), "page_number": 1}]
+        logger.warning(f"content-core extraction failed for .{ext}: {e}")
+        # Binary formats must not be decoded as UTF-8 — that produces garbage
+        # with null bytes that PostgreSQL rejects. Return empty so the caller
+        # can surface a clear "no text content" error instead of crashing.
+        return [{"content": "", "page_number": 1}]
 
 
 async def _extract_text_from_url(url: str) -> list[dict]:

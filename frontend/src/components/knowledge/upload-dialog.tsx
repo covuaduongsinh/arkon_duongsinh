@@ -84,7 +84,7 @@ export function UploadDialog({ open, onOpenChange, types, departments, onUploade
             <div className="relative">
               <Input
                 type="file"
-                accept=".pdf,.docx,.xlsx,.csv,.txt,.md,.pptx"
+                accept=".pdf,.docx,.doc,.xlsx,.csv,.txt,.md,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv,text/markdown"
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
                 className="bg-background"
               />

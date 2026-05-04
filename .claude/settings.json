@@ -12,7 +12,9 @@
       "Bash(Select-Object -ExpandProperty FullName)",
       "Bash(Sort-Object)",
       "Bash(npm install *)",
-      "Bash(rtk tsc *)"
+      "Bash(rtk tsc *)",
+      "Bash(rtk ls *)",
+      "Bash(rtk find *)"
     ]
   }
 }

@@ -12,10 +12,16 @@ by setting a custom base_url.
 
 import asyncio
 import base64
+import json
 from typing import Optional
 
 from loguru import logger
 
+from app.ai.agent_protocol import (
+    AssistantTurn,
+    ToolCall,
+    neutral_to_openai_messages,
+)
 from app.ai.providers.base import (
     EmbeddingProvider,
     LLMProvider,
@@ -123,6 +129,50 @@ class OpenAILLM(LLMProvider):
             temperature=temperature,
         )
         return response.choices[0].message.content or ""
+
+    async def generate_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        system: Optional[str] = None,
+        max_tokens: int = 8192,
+        temperature: float = 0.2,
+    ) -> AssistantTurn:
+        openai_messages = []
+        if system:
+            openai_messages.append({"role": "system", "content": system})
+        openai_messages.extend(neutral_to_openai_messages(messages))
+
+        response = await self.client.chat.completions.create(
+            model=self.config.model_id,
+            messages=openai_messages,
+            tools=tools,  # already in OpenAI format
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+        choice = response.choices[0]
+        message = choice.message
+        text = message.content
+        tool_calls: list[ToolCall] = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                args: dict = {}
+                if tc.function.arguments:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except Exception:
+                        pass
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+
+        reason_map = {"stop": "end_turn", "tool_calls": "tool_use", "length": "max_tokens"}
+        finish_reason = reason_map.get(choice.finish_reason or "stop", "end_turn")
+
+        return AssistantTurn(
+            text=text or None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+        )
 
     async def test_connection(self) -> tuple[bool, str]:
         try:
