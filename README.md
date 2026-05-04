@@ -2,7 +2,7 @@
 
 # Arkon
 
-**Enterprise knowledge management for Claude — self-hosted, on-premise.**
+**Enterprise knowledge management for Claude - self-hosted, on-premise.**
 
 Arkon gives organizations centralized control over how employees use Claude. Admins manage knowledge, access policies, and workspace contexts from a single portal. Employees connect once via the Model Context Protocol (MCP) and get the right context automatically.
 
@@ -12,15 +12,15 @@ Arkon gives organizations centralized control over how employees use Claude. Adm
 
 Most organizations adopt Claude team-by-team with no shared knowledge, inconsistent context, and no visibility into how AI is being used. Every employee manually pastes documents, repeats the same background, and gets different answers depending on what they remembered to include.
 
-Arkon treats Claude as a managed organizational resource — not a public chatbot.
+Arkon treats Claude as a managed organizational resource - not a public chatbot.
 
 ---
 
 ## How it works
 
-When a document is uploaded, Arkon doesn't just index it — it **compiles** it. An LLM reads the document and writes structured knowledge into a persistent wiki: entity pages, concept pages, topic summaries, all interlinked with `[[wikilinks]]`. Each new document updates and enriches the same wiki rather than adding isolated chunks.
+When a document is uploaded, Arkon doesn't just index it - it **compiles** it. An LLM reads the document and writes structured knowledge into a persistent wiki: entity pages, concept pages, topic summaries, all interlinked with `[[wikilinks]]`. Each new document updates and enriches the same wiki rather than adding isolated chunks.
 
-When an employee's Claude queries Arkon, it reads from the compiled wiki — synthesized knowledge, not raw fragments. The wiki accumulates and improves with every document added.
+When an employee's Claude queries Arkon, it reads from the compiled wiki - synthesized knowledge, not raw fragments. The wiki accumulates and improves with every document added.
 
 ```
 Upload document
@@ -49,10 +49,10 @@ Claude queries via MCP  ──→  reads compiled wiki, not raw chunks
 ## Features
 
 ### Knowledge Wiki
-Upload documents (PDF, DOCX, DOC, spreadsheets, URLs) and an LLM agent compiles them into a structured, interlinked wiki. Knowledge compounds over time — later documents enrich existing wiki pages rather than creating duplicate entries.
+Upload documents (PDF, DOCX, DOC, spreadsheets, URLs) and an LLM agent compiles them into a structured, interlinked wiki. Knowledge compounds over time - later documents enrich existing wiki pages rather than creating duplicate entries.
 
-- Full **wiki browser** — three-panel layout with page tree, content, backlinks, outlinks, and local graph visualization
-- Organize by **knowledge type** (SOP, Product, HR Policy, etc.) — admin-defined with color coding
+- Full **wiki browser** - three-panel layout with page tree, content, backlinks, outlinks, and local graph visualization
+- Organize by **knowledge type** (SOP, Product, HR Policy, etc.) - admin-defined with color coding
 - Assign documents to **departments** for scoped access
 - Background compilation pipeline with real-time progress tracking
 - Re-compile any document on demand
@@ -62,13 +62,13 @@ Cross-functional knowledge contexts for initiatives that span multiple departmen
 
 Create a **Workspace** (client engagement, product launch, research project) → add members from any department → attach relevant documents. Each workspace has its own scoped wiki, document list, and member roster. Workspace members access their scoped knowledge automatically through MCP.
 
-- Inline wiki browser per workspace — same three-panel experience as the global wiki
+- Inline wiki browser per workspace - same three-panel experience as the global wiki
 - Inline knowledge graph visualization scoped to workspace documents
 - Document upload and management per workspace
 - Member management with role assignment
 
 ### Access Control (RBAC)
-Fine-grained access at department and individual level. When an employee connects via MCP, Arkon resolves their identity, department, and knowledge scope — then filters which wiki pages they can read.
+Fine-grained access at department and individual level. When an employee connects via MCP, Arkon resolves their identity, department, and knowledge scope - then filters which wiki pages they can read.
 
 ```
 Sales dept     → knowledge: product catalog, customer profiles
@@ -77,12 +77,12 @@ HR dept        → knowledge: internal policies, org structure
 Individual     → personal scope override if needed
 ```
 
-Wiki pages synthesized from multiple sources inherit the union of their contributing knowledge types — a page is visible if the employee has access to at least one of its types. Workspace membership grants additional access to workspace documents.
+Wiki pages synthesized from multiple sources inherit the union of their contributing knowledge types - a page is visible if the employee has access to at least one of its types. Workspace membership grants additional access to workspace documents.
 
 ### MCP Server
 Employees connect Claude Desktop (or any MCP client) to Arkon using a personal token. Claude has three layers of access:
 
-**Wiki layer** — compiled, synthesized knowledge:
+**Wiki layer** - compiled, synthesized knowledge:
 
 | Tool | Description |
 |---|---|
@@ -91,7 +91,7 @@ Employees connect Claude Desktop (or any MCP client) to Arkon using a personal t
 | `read_wiki_page` | Read a specific wiki page with backlinks |
 | `list_wiki_pages` | Filter pages by type or knowledge category |
 
-**Source layer** — raw document drill-down for precise citations:
+**Source layer** - raw document drill-down for precise citations:
 
 | Tool | Description |
 |---|---|
@@ -135,10 +135,10 @@ Employees connect Claude Desktop (or any MCP client) to Arkon using a personal t
 ```
 
 **Stack:**
-- **Backend** — FastAPI, PostgreSQL + pgvector, Redis (arq), MinIO
-- **Frontend** — Next.js, Tailwind CSS
-- **AI** — provider-agnostic: Google, OpenAI, or Anthropic for embedding, LLM, and vision
-- **Outbound** — configured AI provider only. No other external calls.
+- **Backend** - FastAPI, PostgreSQL + pgvector, Redis (arq), MinIO
+- **Frontend** - Next.js, Tailwind CSS
+- **AI** - provider-agnostic: Google, OpenAI, or Anthropic for embedding, LLM, and vision
+- **Outbound** - configured AI provider only. No other external calls.
 
 ---
 
@@ -157,7 +157,7 @@ cd arkon
 cp .env.example .env
 ```
 
-Edit `.env` — at minimum set:
+Edit `.env` - at minimum set:
 
 ```env
 SECRET_KEY=your-random-secret-here
@@ -177,7 +177,7 @@ This starts PostgreSQL, Redis, MinIO, the API server, the background worker, and
 
 Open the admin portal at `http://localhost:3000` and log in with the credentials from your `.env`.
 
-Go to **Settings** and configure your embedding model, LLM, and (optionally) vision model. The LLM is used for wiki compilation — choose a model with a large context window (e.g. `gemini-2.5-pro`, `gpt-4o`, `claude-sonnet-4-5`).
+Go to **Settings** and configure your embedding model, LLM, and (optionally) vision model. The LLM is used for wiki compilation - choose a model with a large context window (e.g. `gemini-2.5-pro`, `gpt-4o`, `claude-sonnet-4-5`).
 
 ### 4. Upload knowledge
 
@@ -202,7 +202,7 @@ Go to **Knowledge Base** and upload your first document. Arkon will extract text
 }
 ```
 
-The employee opens Claude Desktop — the compiled wiki for their scope is available immediately.
+The employee opens Claude Desktop - the compiled wiki for their scope is available immediately.
 
 ---
 
@@ -230,17 +230,12 @@ arkon/
 
 - [x] MCP Server with scoped knowledge access
 - [x] Document ingestion pipeline (PDF, DOCX, DOC, URLs, images with vision captions)
-- [x] LLM Wiki Agent — documents compiled into persistent, interlinked wiki pages
-- [x] Knowledge types and department-level RBAC
-- [x] Wiki browser — three-panel layout with backlinks, outlinks, and graph visualization
-- [x] Knowledge graph visualization (force-directed, filterable by type)
-- [x] Workspaces — scoped wiki, documents, and members per project
-- [x] Admin portal UI
-- [x] Contacts directory
-- [x] Raw source drill-down via MCP (outline + page-level citations)
-- [ ] User wiki contributions — suggest edits, flag outdated content
+- [x] LLM Wiki Agent - documents compiled into persistent, interlinked wiki pages
+- [x] Wiki browser - three-panel layout with backlinks, outlinks, and graph visualization
+- [x] Workspaces - scoped wiki, documents, and members per project
+- [x] Access Control for Admin
+- [ ] User wiki contributions - suggest edits, flag outdated content
 - [ ] Audit logs and usage analytics
-- [ ] SSO (Active Directory, Google Workspace, SAML)
 - [ ] Arkon CLI for one-command employee setup
 
 ---
@@ -255,9 +250,9 @@ Pull requests are welcome. For significant changes, open an issue first to discu
 
 Arkon is licensed under the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0).
 
-You may use, study, and modify Arkon freely for **noncommercial purposes** — internal tooling, research, personal projects, and non-profit use are all fine.
+You may use, study, and modify Arkon freely for **noncommercial purposes** - internal tooling, research, personal projects, and non-profit use are all fine.
 
-**Need something beyond that?** We help organizations integrate Claude, custom AI agents, and MCP servers into their existing infrastructure and workflows — from connecting to internal databases and legacy systems to building purpose-built agents for specific business processes.
+**Need something beyond that?** We help organizations integrate Claude, custom AI agents, and MCP servers into their existing infrastructure and workflows - from connecting to internal databases and legacy systems to building purpose-built agents for specific business processes.
 
 [Get in touch](https://bitsness.vn) if you're looking to build something custom.
 
