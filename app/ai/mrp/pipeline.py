@@ -30,29 +30,19 @@ from app.utils.progress import ProgressTracker
 async def _resolve_wiki_scopes(session: AsyncSession, source) -> list[tuple[str, Optional[uuid.UUID]]]:
     """Return the list of (scope_type, scope_id) tuples to commit wiki pages into.
 
-    After migration 021, a wiki page lives in exactly one scope (global or
-    project). Department membership is a separate M:N tag set applied AFTER
-    commit (see _resolve_source_dept_ids). So this returns a single-element
-    list except for project sources.
+    Project scope takes priority. If source has department assignments, one scope
+    per department. Falls back to global.
     """
+    from app.database.models import SourceDepartment
     if source.scope_type == "project":
         return [("project", source.scope_id)]
-    return [("global", None)]
-
-
-async def _resolve_source_dept_ids(session: AsyncSession, source) -> list[uuid.UUID]:
-    """Return the department UUIDs this source belongs to (M:N via
-    source_departments). Empty list = source is not tagged to any department.
-    Project sources are excluded — project scope is the access boundary, not
-    dept tags.
-    """
-    if source.scope_type == "project":
-        return []
-    from app.database.models import SourceDepartment
     rows = (await session.execute(
         select(SourceDepartment.department_id).where(SourceDepartment.source_id == source.id)
     )).all()
-    return [r[0] for r in rows]
+    dept_ids = [r[0] for r in rows]
+    if dept_ids:
+        return [("department", did) for did in dept_ids]
+    return [("global", None)]
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +75,6 @@ async def run_commit_phase(
     )
 
     wiki_scopes = await _resolve_wiki_scopes(session, source)
-    source_dept_ids = await _resolve_source_dept_ids(session, source)
 
     total_created = 0
     total_updated = 0
@@ -185,14 +174,6 @@ async def run_commit_phase(
                         pages_updated += 1
 
                 await session.flush()
-
-                # UNION this source's dept tags onto the page so visibility
-                # tracks all contributing sources. Idempotent — duplicate tags
-                # are ignored.
-                if page is not None and source_dept_ids:
-                    await wiki_service.add_page_departments(
-                        session, page.id, source_dept_ids
-                    )
 
                 if embedding_provider is not None and embedding_spec is not None and page is not None:
                     try:

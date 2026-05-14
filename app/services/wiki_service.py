@@ -21,13 +21,7 @@ from sqlalchemy import and_, delete, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import (
-    WikiLink,
-    WikiPage,
-    WikiPageDepartment,
-    WikiPageDraft,
-    WikiPageRevision,
-)
+from app.database.models import WikiLink, WikiPage, WikiPageDraft, WikiPageRevision
 
 # Reserved page slugs — these are regular WikiPage rows but treated specially.
 INDEX_SLUG = "_index"
@@ -52,91 +46,13 @@ def _scope_filter(scope_type: str = "global", scope_id: Optional[uuid.UUID] = No
 
 
 def _scope_filter_with_dept(department_id: Optional[uuid.UUID] = None):
-    """OR-filter: global pages visible to the given dept member.
-
-    Visibility under wiki:read:own_dept = (global pages) UNION (global pages
-    tagged with the user's department via wiki_page_departments). Since dept-
-    tagged pages are themselves stored as scope_type='global' after migration
-    021, both branches sit on the global scope; the dept branch just narrows
-    further by membership in the junction table.
-    """
+    """OR-filter: global pages + department pages visible to the given dept member."""
     if department_id:
-        return and_(
-            WikiPage.scope_type == "global",
-            WikiPage.scope_id.is_(None),
-            or_(
-                # Untagged global pages — visible to everyone.
-                ~WikiPage.id.in_(select(WikiPageDepartment.page_id)),
-                # Tagged for this department.
-                WikiPage.id.in_(
-                    select(WikiPageDepartment.page_id)
-                    .where(WikiPageDepartment.department_id == department_id)
-                ),
-            ),
+        return or_(
+            and_(WikiPage.scope_type == "global", WikiPage.scope_id.is_(None)),
+            and_(WikiPage.scope_type == "department", WikiPage.scope_id == department_id),
         )
     return _scope_filter("global")
-
-
-async def set_page_departments(
-    session: AsyncSession,
-    page_id: uuid.UUID,
-    department_ids: list[uuid.UUID],
-) -> None:
-    """Replace the dept tag set for a page. Empty list → untag (page becomes
-    visible to all with wiki:read).
-    """
-    await session.execute(
-        delete(WikiPageDepartment).where(WikiPageDepartment.page_id == page_id)
-    )
-    if department_ids:
-        await session.execute(
-            pg_insert(WikiPageDepartment)
-            .values([{"page_id": page_id, "department_id": d} for d in department_ids])
-            .on_conflict_do_nothing()
-        )
-
-
-async def add_page_departments(
-    session: AsyncSession,
-    page_id: uuid.UUID,
-    department_ids: list[uuid.UUID],
-) -> None:
-    """UNION dept tags onto a page — used by the ingest pipeline so that pages
-    contributed to by sources from multiple departments accumulate all the
-    relevant tags. Existing tags are preserved.
-    """
-    if not department_ids:
-        return
-    await session.execute(
-        pg_insert(WikiPageDepartment)
-        .values([{"page_id": page_id, "department_id": d} for d in department_ids])
-        .on_conflict_do_nothing()
-    )
-
-
-async def rederive_page_departments_from_sources(
-    session: AsyncSession,
-    page_id: uuid.UUID,
-) -> None:
-    """Recompute dept tags for a page = UNION of departments across all
-    source_ids still referenced by the page. Used after detach so tags reflect
-    the page's current contributing sources (no stale tags from removed sources).
-    """
-    from app.database.models import SourceDepartment
-    page = await session.get(WikiPage, page_id)
-    if page is None:
-        return
-    source_ids = list(page.source_ids or [])
-    if not source_ids:
-        await set_page_departments(session, page_id, [])
-        return
-    rows = (await session.execute(
-        select(SourceDepartment.department_id)
-        .where(SourceDepartment.source_id.in_(source_ids))
-        .distinct()
-    )).all()
-    new_dept_ids = [r[0] for r in rows]
-    await set_page_departments(session, page_id, new_dept_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -699,7 +615,6 @@ async def detach_source_from_wiki(
     stmt = select(WikiPage).where(WikiPage.source_ids.any(source_id))  # type: ignore[arg-type]
     pages = list((await session.execute(stmt)).scalars().all())
     deleted_count = 0
-    survivors: list[uuid.UUID] = []
     for page in pages:
         remaining = [sid for sid in (page.source_ids or []) if sid != source_id]
         if not remaining:
@@ -707,12 +622,6 @@ async def detach_source_from_wiki(
             deleted_count += 1
         else:
             page.source_ids = remaining
-            survivors.append(page.id)
-    await session.flush()
-    # Re-derive dept tags from the new source list — a removed source must not
-    # leave behind a "phantom" dept tag if no remaining source belongs to it.
-    for page_id in survivors:
-        await rederive_page_departments_from_sources(session, page_id)
     await session.flush()
     if deleted_count:
         logger.info(f"detach_source_from_wiki({source_id}): deleted {deleted_count} single-source pages")

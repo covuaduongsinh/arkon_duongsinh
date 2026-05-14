@@ -14,11 +14,6 @@ export type GraphLink = SimulationLinkDatum<GraphNode> & {
   to: string;
 };
 
-export type DepartmentRef = {
-  id: string;
-  name: string;
-};
-
 export type NodeInput = {
   slug: string;
   title: string;
@@ -26,5 +21,4 @@ export type NodeInput = {
   scope_type?: string;
   scope_id?: string | null;
   scope_name?: string | null;
-  departments?: DepartmentRef[];
 };
