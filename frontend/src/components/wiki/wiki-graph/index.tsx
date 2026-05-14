@@ -205,9 +205,9 @@ export function WikiGraph({
 
     fg.d3Force(
       "x",
-      forceX<Node>((d: Node) => d.__targetX ?? 0).strength(0.05)
+      forceX<Node>((d: Node) => d.__targetX ?? 0).strength(0.1)
     );
-    fg.d3Force("y", forceY<Node>(0).strength(0.03));
+    fg.d3Force("y", forceY<Node>(0).strength(0.05));
 
     // Charge stronger for hub nodes so leaves don't pile up on top.
     const charge = fg.d3Force("charge");
