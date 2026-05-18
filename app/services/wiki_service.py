@@ -549,7 +549,7 @@ async def append_log(
 
 async def delete_page_cascade(
     session: AsyncSession,
-    slug: str,
+    page: WikiPage,
 ) -> None:
     """
     Delete a wiki page and cascade-cleanup all references:
@@ -557,8 +557,14 @@ async def delete_page_cascade(
     2. Delete all incoming links pointing to this page
     3. Remove [[slug]] and [[slug|text]] wikilinks from pages that reference this one
     4. Delete the page itself
+
+    Caller passes the already-resolved page so we never accidentally fall back
+    to a different scope's copy of the same slug.
     """
-    # 1+2: Remove all wikilink edges
+    slug = page.slug
+
+    # 1+2: Remove all wikilink edges (WikiLink is keyed by slug only and is
+    # rebuilt by refresh_links — fine to clear edges for any same-slug page).
     await session.execute(
         delete(WikiLink).where(
             (WikiLink.from_slug == slug) | (WikiLink.to_slug == slug)
@@ -575,7 +581,7 @@ async def delete_page_cascade(
     )).scalars().all()
 
     for ref_page in referring_pages:
-        if ref_page.slug == slug:
+        if ref_page.id == page.id:
             continue
         cleaned = ref_page.content_md or ""
         # Replace [[slug|display]] with just display text
@@ -588,10 +594,8 @@ async def delete_page_cascade(
         cleaned = cleaned.replace(f"[[{slug}]]", slug.split("/")[-1])
         ref_page.content_md = cleaned
 
-    # 4: Delete the page
-    page = await get_page_by_slug(session, slug)
-    if page:
-        await session.delete(page)
+    # 4: Delete the page itself
+    await session.delete(page)
 
     await session.flush()
     logger.info(f"delete_page_cascade({slug}): deleted page + cleaned {len(referring_pages)} references")

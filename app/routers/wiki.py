@@ -501,7 +501,7 @@ async def delete_wiki_page(
     deleted_scope_type = page.scope_type or "global"
     deleted_scope_id = page.scope_id
     await log_audit(db, user, "delete", "wiki", slug, reason=deleted_title)
-    await wiki_service.delete_page_cascade(db, slug)
+    await wiki_service.delete_page_cascade(db, page)
     await wiki_service.regenerate_index(db, scope_type=deleted_scope_type, scope_id=deleted_scope_id)
     await wiki_service.append_log(db, f"Deleted page: {deleted_title} ({slug})")
     await db.commit()
