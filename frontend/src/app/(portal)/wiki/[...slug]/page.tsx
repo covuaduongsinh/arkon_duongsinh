@@ -218,11 +218,17 @@ export default function WikiPageViewer() {
       />
 
       <div className="flex-1 flex gap-0 -mx-6 md:-mx-8 lg:-mx-10 -mb-6 md:-mb-8 lg:-mb-10 min-h-0 border-t border-border overflow-hidden">
-        {/* Left: Page Tree — for scoped detail, fetch only that scope's pages
-            via the general scope-aware endpoint (works for both department and
-            project scopes; the project-specific endpoint 404s on department IDs). */}
+        {/* Left: Page Tree — always render scope-grouped so the detail-page
+            sidebar matches /wiki. For scoped pages we still filter pagesUrl to
+            that scope so the tree stays focused; the active scope bucket
+            auto-expands. */}
         <WikiPageTree
           activeSlug={fullSlug}
+          groupByScope
+          activeScope={{
+            scope_type: scopeType ?? "global",
+            scope_id: scopeId ?? null,
+          }}
           pagesUrl={
             isScoped
               ? `/api/wiki/pages?scope_type=${scopeType}&scope_id=${scopeId}&limit=200`
