@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import { MarkdownEditor } from "./markdown-editor";
 import { api } from "@/lib/api";
 import { WikiScope, WikiPageDetail, DraftResponse } from "@/types/wiki";
 
@@ -140,7 +140,7 @@ export function WikiCreatePageDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
             {mode === "direct" ? "Create new page" : "Propose new page"}
@@ -218,13 +218,12 @@ export function WikiCreatePageDialog({
           </div>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="cp-content">Content (Markdown)</Label>
-            <Textarea
-              id="cp-content"
+            <Label>Content</Label>
+            <MarkdownEditor
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="# Overview&#10;&#10;Use [[wikilinks]] to reference other pages."
-              className="min-h-64 font-mono text-sm"
+              onChange={setContent}
+              placeholder={"# Overview\n\nUse [[wikilinks]] to reference other pages."}
+              minHeightClass="min-h-[280px]"
             />
           </div>
 

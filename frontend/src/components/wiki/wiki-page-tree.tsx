@@ -55,6 +55,8 @@ export function WikiPageTree({
   onPageSelect,
   groupByScope = false,
   activeScope,
+  getCreateModeForScope,
+  onCreatePage,
 }: {
   activeSlug?: string;
   onDeleted?: () => void;
@@ -68,6 +70,11 @@ export function WikiPageTree({
   groupByScope?: boolean;
   /** Auto-expand the bucket matching this scope (used together with groupByScope). */
   activeScope?: { scope_type: string; scope_id: string | null };
+  /** Optional: return which create flow ("direct" | "propose" | null) applies for a scope.
+   *  When provided AND non-null, the tree shows a `+` button on that scope's header. */
+  getCreateModeForScope?: (scope: { scope_type: string; scope_id: string | null }) => "direct" | "propose" | null;
+  /** Called when the user clicks the per-scope `+` button. */
+  onCreatePage?: (scope: { scope_type: string; scope_id: string | null }) => void;
 }) {
   const pathname = usePathname();
   const [pages, setPages] = React.useState<WikiPageSummary[]>([]);
@@ -461,10 +468,42 @@ export function WikiPageTree({
                       >
                         {bucket.label}
                       </span>
-                      <span className="text-xs text-muted-foreground tabular-nums pr-2">
+                      <span className="text-xs text-muted-foreground tabular-nums">
                         {bucket.total}
                       </span>
                     </Link>
+                    {(() => {
+                      if (!onCreatePage || !getCreateModeForScope) return null;
+                      const mode = getCreateModeForScope({
+                        scope_type: bucket.scope_type,
+                        scope_id: bucket.scope_id ?? null,
+                      });
+                      if (!mode) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onCreatePage({
+                              scope_type: bucket.scope_type,
+                              scope_id: bucket.scope_id ?? null,
+                            });
+                          }}
+                          className="shrink-0 mr-1 w-5 h-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                          title={
+                            mode === "direct"
+                              ? `New page in ${bucket.label}`
+                              : `Propose new page in ${bucket.label}`
+                          }
+                          aria-label={`Create page in ${bucket.label}`}
+                        >
+                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                            add
+                          </span>
+                        </button>
+                      );
+                    })()}
                   </div>
                   {scopeExpanded && (
                     <div className="ml-3">

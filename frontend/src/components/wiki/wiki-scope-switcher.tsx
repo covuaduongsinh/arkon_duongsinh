@@ -58,7 +58,7 @@ export function WikiScopeSwitcher({ current }: Props) {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card hover:bg-accent text-sm font-medium text-foreground transition-colors">
+      <DropdownMenuTrigger className="inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg border border-border bg-card hover:bg-accent text-sm font-medium text-foreground transition-colors">
         <span
           className="material-symbols-outlined text-base text-muted-foreground"
           style={{ fontSize: 16 }}

@@ -102,31 +102,42 @@ export default function WikiIndexPage() {
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Compute whether the user can create / propose in the currently selected
-  // scope, and which mode the dialog should open in.
+  // Permission helper: which create flow (if any) is available for the given
+  // scope. Used to gate the header button and to surface per-scope `+`
+  // buttons inside the page tree.
   const isAdmin = user?.role === "admin";
-  const createMode: "direct" | "propose" | null = React.useMemo(() => {
-    if (!user) return null;
-    const st = selectedScope.scope_type;
-    const sid = selectedScope.scope_id;
-    if (st === "project" && sid) {
-      const role = getWorkspaceRole(sid);
-      if (isAdmin || roleAtLeast(role, "editor")) return "direct";
-      if (roleAtLeast(role, "contributor")) return "propose";
-      return null;
-    }
-    if (st === "department" && sid) {
-      if (isAdmin || hasPermission("wiki:write:all")) return "direct";
-      if (hasPermission("wiki:write:own_dept") && user.department_id === sid) {
-        return "propose";
+  const getCreateModeForScope = React.useCallback(
+    (scope: { scope_type: string; scope_id: string | null }): "direct" | "propose" | null => {
+      if (!user) return null;
+      const st = scope.scope_type;
+      const sid = scope.scope_id;
+      if (st === "project" && sid) {
+        const role = getWorkspaceRole(sid);
+        if (isAdmin || roleAtLeast(role, "editor")) return "direct";
+        if (roleAtLeast(role, "contributor")) return "propose";
+        return null;
       }
+      if (st === "department" && sid) {
+        if (isAdmin || hasPermission("wiki:write:all")) return "direct";
+        if (hasPermission("wiki:write:own_dept") && user.department_id === sid) {
+          return "propose";
+        }
+        return null;
+      }
+      // global
+      if (isAdmin || hasPermission("wiki:write:all")) return "direct";
+      if (hasPermission("wiki:write:own_dept")) return "propose";
       return null;
-    }
-    // global
-    if (isAdmin || hasPermission("wiki:write:all")) return "direct";
-    if (hasPermission("wiki:write:own_dept")) return "propose";
-    return null;
-  }, [user, isAdmin, selectedScope, getWorkspaceRole, hasPermission]);
+    },
+    [user, isAdmin, getWorkspaceRole, hasPermission],
+  );
+  const createMode = getCreateModeForScope(selectedScope);
+
+  // Scope the dialog opens against. The header button uses the currently
+  // selected scope; the tree's `+` button overrides this on click.
+  const [dialogScope, setDialogScope] = React.useState<WikiScope | null>(null);
+  const dialogTargetScope: WikiScope = dialogScope ?? selectedScope;
+  const dialogMode = getCreateModeForScope(dialogTargetScope);
 
   // Stats
   const totalPages = allPages.length;
@@ -167,7 +178,10 @@ export default function WikiIndexPage() {
             {createMode && (
               <Button
                 variant="outline"
-                onClick={() => setCreateOpen(true)}
+                onClick={() => {
+                  setDialogScope(null); // header button = current scope
+                  setCreateOpen(true);
+                }}
                 className="gap-2"
                 title={
                   createMode === "direct"
@@ -181,9 +195,9 @@ export default function WikiIndexPage() {
             )}
             <Link
               href="/wiki/graph"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              className="inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
             >
-              <span className="material-symbols-outlined text-base">hub</span>
+              <span className="material-symbols-outlined" style={{ fontSize: 16 }}>hub</span>
               Graph View
             </Link>
           </div>
@@ -197,6 +211,27 @@ export default function WikiIndexPage() {
           activeScope={{
             scope_type: selectedScope.scope_type,
             scope_id: selectedScope.scope_id,
+          }}
+          getCreateModeForScope={(scope) =>
+            getCreateModeForScope({
+              scope_type: scope.scope_type,
+              scope_id: scope.scope_id,
+            })
+          }
+          onCreatePage={(scope) => {
+            const match = scopes.find(
+              (s) =>
+                s.scope_type === scope.scope_type &&
+                (s.scope_id ?? null) === (scope.scope_id ?? null),
+            );
+            setDialogScope(
+              match ?? {
+                scope_type: scope.scope_type,
+                scope_id: scope.scope_id,
+                name: scope.scope_type,
+              },
+            );
+            setCreateOpen(true);
           }}
         />
 
@@ -324,12 +359,15 @@ export default function WikiIndexPage() {
       </div>
 
       <WikiSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
-      {createMode && (
+      {dialogMode && (
         <WikiCreatePageDialog
           open={createOpen}
-          onOpenChange={setCreateOpen}
-          mode={createMode}
-          defaultScope={selectedScope}
+          onOpenChange={(o) => {
+            setCreateOpen(o);
+            if (!o) setDialogScope(null);
+          }}
+          mode={dialogMode}
+          defaultScope={dialogTargetScope}
           scopes={scopes}
         />
       )}
