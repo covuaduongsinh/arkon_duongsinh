@@ -10,10 +10,12 @@ This service is called by the MCP server to:
 Permission model v2: uses source_departments M2M and scoped permissions.
 """
 
+import hashlib
+import hmac
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from loguru import logger
@@ -21,6 +23,7 @@ from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import settings
 from app.database.models import (
     Employee,
     ProjectMember,
@@ -28,6 +31,24 @@ from app.database.models import (
     Source,
     SourceDepartment,
 )
+
+# `last_connected` is bumped on every authenticated MCP request — debounce so a
+# single user spamming tool calls doesn't generate a write per call.
+LAST_CONNECTED_DEBOUNCE = timedelta(seconds=60)
+
+
+def hash_token(token: str) -> str:
+    """HMAC-SHA256(pepper, token), hex-encoded.
+
+    Tokens are 256-bit URL-safe random strings, so a plain HMAC (no bcrypt) is
+    sufficient — there is no practical brute-force surface. The pepper means a
+    raw DB dump alone is not enough to forge tokens.
+    """
+    return hmac.new(
+        settings.mcp_token_pepper.encode("utf-8"),
+        token.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 @dataclass
@@ -54,10 +75,18 @@ class MCPAuthService:
         """
         Verify an MCP bearer token and return the resolved identity.
         Returns None if token is invalid/inactive.
+
+        Sets `identity._last_connected_bumped` (transient flag on the returned
+        identity, accessed via `bumped_last_connected` below) so callers know
+        whether a commit is needed.
         """
+        token_hash = hash_token(token)
         stmt = (
             select(Employee)
-            .where(Employee.mcp_token == token, Employee.is_active.is_(True))
+            .where(
+                Employee.mcp_token_hash == token_hash,
+                Employee.is_active.is_(True),
+            )
             .options(
                 selectinload(Employee.department),
                 selectinload(Employee.custom_role),
@@ -69,13 +98,23 @@ class MCPAuthService:
         if not employee:
             return None
 
-        # Update last_connected
-        employee.last_connected = datetime.now(timezone.utc)
-        await self.db.flush()
+        # Debounce last_connected — at most one write per minute per employee.
+        now = datetime.now(timezone.utc)
+        prev = employee.last_connected
+        self._bumped = False
+        if prev is None or (now - prev) > LAST_CONNECTED_DEBOUNCE:
+            employee.last_connected = now
+            await self.db.flush()
+            self._bumped = True
 
         # Resolve knowledge scope
         identity = await self._resolve_scope(employee)
         return identity
+
+    @property
+    def bumped_last_connected(self) -> bool:
+        """True if the most recent verify_token actually wrote last_connected."""
+        return getattr(self, "_bumped", False)
 
     async def _resolve_scope(self, employee: Employee) -> ResolvedIdentity:
         """
@@ -192,13 +231,23 @@ class MCPAuthService:
     # --- Token Management ---
 
     async def generate_token(self, employee_id: uuid.UUID) -> str:
-        """Generate a new MCP token for an employee."""
+        """Generate a new MCP token for an employee.
+
+        Returns the plaintext token to the caller exactly once — only the hash
+        is persisted. There is no read-back path; if the user loses it they
+        must rotate again.
+        """
         token = f"ark_{secrets.token_urlsafe(32)}"
 
         stmt = (
             update(Employee)
             .where(Employee.id == employee_id)
-            .values(mcp_token=token)
+            .values(
+                mcp_token=None,  # ensure legacy plaintext stays cleared
+                mcp_token_hash=hash_token(token),
+                mcp_token_prefix=token[:12],
+                mcp_token_rotated_at=datetime.now(timezone.utc),
+            )
         )
         await self.db.execute(stmt)
         await self.db.flush()
@@ -211,7 +260,11 @@ class MCPAuthService:
         stmt = (
             update(Employee)
             .where(Employee.id == employee_id)
-            .values(mcp_token=None)
+            .values(
+                mcp_token=None,
+                mcp_token_hash=None,
+                mcp_token_prefix=None,
+            )
         )
         result = await self.db.execute(stmt)
         await self.db.flush()
@@ -227,6 +280,12 @@ def apply_scope_filter(query, identity: ResolvedIdentity):
       2. Source ID is in allowed_source_ids (explicit grant)
       3. Source knowledge_type is in allowed_knowledge_types (type-based grant)
       4. Source is in one of the employee's active projects (project grant)
+
+    NOTE: project membership grants access REGARDLESS of allowed_knowledge_types
+    (OR semantics across all conditions). This is intentional — adding a user
+    to a workspace is treated as an explicit override of their KT scope. Do
+    NOT change this to AND; it would silently revoke workspace access for any
+    user whose default KT list excludes the workspace's source types.
 
     Usage:
         stmt = select(Source).where(Source.status == "ready")

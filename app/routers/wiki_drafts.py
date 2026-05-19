@@ -302,7 +302,12 @@ async def _can_review_draft(
         scope_id_raw = sm.get("scope_id")
         try:
             scope_id = uuid.UUID(scope_id_raw) if isinstance(scope_id_raw, str) else scope_id_raw
-        except ValueError:
+        except (ValueError, TypeError):
+            scope_id = None
+        if scope_id is not None and not isinstance(scope_id, uuid.UUID):
+            # Defensive: non-string non-UUID values (e.g. ints) leak through if
+            # suggested_metadata was hand-crafted. Treat as missing rather than
+            # passing a junk type down to get_workspace_role.
             scope_id = None
         return await _can_review_scope(db, user, scope_type, scope_id)
     # Edit drafts: defer to page-based check.
@@ -1075,12 +1080,33 @@ async def bulk_approve_drafts(
             skipped_count += 1
             continue
 
+        # Each draft gets its own SAVEPOINT so a mid-approve failure (conflict,
+        # IntegrityError, etc.) rolls back just this draft instead of poisoning
+        # the outer session for every subsequent iteration in the loop.
         try:
-            page = await wiki_service.approve_draft(
-                db, draft, user.id,
-                reviewer_note=body.reviewer_note,
-                allow_conflict=body.allow_conflict,
-            )
+            async with db.begin_nested():
+                page = await wiki_service.approve_draft(
+                    db, draft, user.id,
+                    reviewer_note=body.reviewer_note,
+                    allow_conflict=body.allow_conflict,
+                )
+                await log_audit(
+                    db, user, "update", "wiki_draft", str(draft.id),
+                    reason=f"bulk-approved: {page.slug}",
+                )
+                scope_type = page.scope_type or "global"
+                scope_id = page.scope_id
+                await wiki_service.regenerate_index(db, scope_type=scope_type, scope_id=scope_id)
+                await wiki_service.append_log(
+                    db,
+                    f"Bulk-approved draft for: {page.title} ({page.slug}) -> v{page.version} by {user.name or user.email}",
+                    scope_type=scope_type, scope_id=scope_id,
+                )
+                draft.page = page
+                await contribution_service.notify_approved(
+                    db, wiki_draft_adapter, draft, user,
+                    version_label=f"v{page.version}",
+                )
         except wiki_service.DraftConflictError as e:
             results.append(BulkApproveItemResult(
                 draft_id=did, status="error",
@@ -1095,7 +1121,7 @@ async def bulk_approve_drafts(
             ))
             errored_count += 1
             continue
-        except (ValueError, Exception) as e:
+        except Exception as e:
             results.append(BulkApproveItemResult(
                 draft_id=did, status="error",
                 message=str(e),
@@ -1103,23 +1129,6 @@ async def bulk_approve_drafts(
             errored_count += 1
             continue
 
-        await log_audit(
-            db, user, "update", "wiki_draft", str(draft.id),
-            reason=f"bulk-approved: {page.slug}",
-        )
-        scope_type = page.scope_type or "global"
-        scope_id = page.scope_id
-        await wiki_service.regenerate_index(db, scope_type=scope_type, scope_id=scope_id)
-        await wiki_service.append_log(
-            db,
-            f"Bulk-approved draft for: {page.title} ({page.slug}) -> v{page.version} by {user.name or user.email}",
-            scope_type=scope_type, scope_id=scope_id,
-        )
-        draft.page = page
-        await contribution_service.notify_approved(
-            db, wiki_draft_adapter, draft, user,
-            version_label=f"v{page.version}",
-        )
         results.append(BulkApproveItemResult(
             draft_id=did, status="approved",
             page_version=page.version,

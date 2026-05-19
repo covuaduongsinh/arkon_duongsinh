@@ -108,9 +108,14 @@ async def run_sync_checks(
 # ---------------------------------------------------------------------------
 
 async def run_async_checks(draft_id: str) -> None:
-    """Worker entry. Self-contained — opens its own session."""
+    """Worker entry. Self-contained — opens its own session.
+
+    Runs ALL four layers (L1 regex, L2 structural, L3 semantic, L4 LLM). The
+    submit path no longer runs anything synchronously, so this is the only
+    place AI checks execute.
+    """
     from app.database import async_session_factory
-    from app.services.ai_review import llm_checks, semantic_checks
+    from app.services.ai_review import llm_checks, regex_checks, semantic_checks, structural_checks
 
     try:
         did = uuid.UUID(draft_id)
@@ -133,8 +138,10 @@ async def run_async_checks(draft_id: str) -> None:
         await db.commit()
 
         page = await db.get(WikiPage, draft.page_id) if draft.page_id else None
-        self_slug = page.slug if page else None
-        scope_type = page.scope_type if page else "global"
+        self_slug = page.slug if page else (draft.suggested_metadata or {}).get("slug")
+        scope_type = page.scope_type if page else (
+            (draft.suggested_metadata or {}).get("scope_type") or "global"
+        )
         scope_id = page.scope_id if page else None
         title = page.title if page else (draft.suggested_metadata or {}).get("title", "")
         page_type = page.page_type if page else (
@@ -142,6 +149,25 @@ async def run_async_checks(draft_id: str) -> None:
         )
 
         new_checks: list[dict] = []
+        # L1 + L2 — cheap, always succeed. Run them first so even if L3/L4
+        # crashes the draft still has regex/structural verdicts attached.
+        try:
+            new_checks.extend(regex_checks.run(draft.content_md))
+            new_checks.extend(await structural_checks.run(
+                db, draft.content_md, self_slug=self_slug,
+                scope_type=scope_type, scope_id=scope_id,
+            ))
+        except Exception as e:
+            logger.exception(f"ai_pre_review_draft: L1/L2 failure: {e}")
+            new_checks.append({
+                "id": "runner.l12_error",
+                "layer": "L2",
+                "severity": "warn",
+                "status": "skipped",
+                "message": f"L1/L2 checks crashed: {e}",
+                "matches": [],
+            })
+
         try:
             new_checks.extend(await semantic_checks.run(
                 db, content_md=draft.content_md,
@@ -163,17 +189,8 @@ async def run_async_checks(draft_id: str) -> None:
                 "matches": [],
             })
 
-        # Merge with existing L1+L2 verdict written at submit time.
-        existing = (draft.ai_check_results or {}).get("checks", [])
-        merged = list(existing)
-        existing_ids = {c.get("id") for c in merged}
-        for c in new_checks:
-            if c.get("id") in existing_ids:
-                # Replace prior verdict of same id (e.g. retry).
-                merged = [m for m in merged if m.get("id") != c.get("id")]
-            merged.append(c)
-
-        results = _build(merged)
+        # Worker is now the sole writer of ai_check_results — replace, don't merge.
+        results = _build(new_checks)
         draft.ai_check_results = results
         summary = results["summary"]
         if summary["fail"] > 0:

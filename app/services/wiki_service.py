@@ -793,6 +793,7 @@ async def approve_draft(
     # the page content. Lock by slug (when known) so we don't block the
     # entire page table.
     target_slug: Optional[str] = None
+    existing_page: Optional[WikiPage] = None
     if draft.draft_kind == "create":
         target_slug = (draft.suggested_metadata or {}).get("slug")
     else:
@@ -802,6 +803,11 @@ async def approve_draft(
         await session.execute(
             select(func.pg_advisory_xact_lock(func.hashtext(target_slug)))
         )
+        # The page row was loaded BEFORE the lock; another reviewer may have
+        # bumped its version while we waited. Refresh from DB so version /
+        # content_md reflect the committed state inside the critical section.
+        if existing_page is not None:
+            await session.refresh(existing_page)
 
     if draft.draft_kind == "create":
         meta = dict(draft.suggested_metadata or {})

@@ -49,7 +49,11 @@ async def _get_identity():
         identity = await auth_svc.verify_token(token)
         if identity is None:
             return None, "Invalid or inactive MCP token. Contact your administrator."
-        await session.commit()
+        # Only commit when verify_token actually bumped last_connected;
+        # otherwise this is a pure read and an empty COMMIT round-trips Redis
+        # latency for nothing on every MCP tool call.
+        if auth_svc.bumped_last_connected:
+            await session.commit()
 
     current_identity.set(identity)
     return identity, None
@@ -1476,6 +1480,7 @@ def register_tools(mcp: FastMCP):
 
         if not slug or not title or not content_md.strip():
             return "Error: slug, title, and content_md are required."
+        slug = slug.strip()
         if slug in ("_index", "_log"):
             return "Error: '_index' and '_log' are reserved slugs."
         if len(content_md) > 50_000:
@@ -1596,8 +1601,11 @@ def register_tools(mcp: FastMCP):
 
         if not slug or not title or not content_md.strip():
             return "Error: slug, title, and content_md are required."
+        slug = slug.strip()
         if slug in ("_index", "_log"):
             return "Error: '_index' and '_log' are reserved slugs."
+        if any(c.isspace() for c in slug):
+            return "Error: slug must not contain whitespace."
         if page_type not in wiki_service.PAGE_TYPES:
             return f"Error: page_type must be one of {sorted(wiki_service.PAGE_TYPES)}."
         if scope_type not in ("global", "department", "project"):
