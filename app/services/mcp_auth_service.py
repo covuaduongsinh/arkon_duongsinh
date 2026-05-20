@@ -61,6 +61,10 @@ class ResolvedIdentity:
     allowed_knowledge_types: Optional[list[str]] = None  # None = all
     allowed_source_ids: Optional[list[str]] = None       # None = all
     project_source_ids: list[str] = field(default_factory=list)  # always granted via projects
+    # UUIDs (as strings) of every workspace the user is a member of. Used by
+    # the wiki layer to include project-scoped wiki pages of those workspaces
+    # in search/list/read paths — otherwise they're invisible even to members.
+    project_ids: list[str] = field(default_factory=list)
     is_admin: bool = False
     permissions: list[str] = field(default_factory=list)
 
@@ -127,7 +131,7 @@ class MCPAuthService:
         )
 
         permissions = get_effective_permissions(employee)
-        project_source_ids = await self._resolve_project_sources(employee.id)
+        project_ids, project_source_ids = await self._resolve_projects(employee.id)
 
         # Admin gets unrestricted access
         if employee.role == "admin":
@@ -137,6 +141,7 @@ class MCPAuthService:
                 department_id=employee.department_id,
                 department_name=employee.department.name if employee.department else "",
                 project_source_ids=project_source_ids,
+                project_ids=project_ids,
                 is_admin=True,
                 permissions=permissions,
             )
@@ -152,6 +157,7 @@ class MCPAuthService:
                 department_id=employee.department_id,
                 department_name=employee.department.name if employee.department else "",
                 project_source_ids=project_source_ids,
+                project_ids=project_ids,
                 permissions=permissions,
             )
 
@@ -166,6 +172,7 @@ class MCPAuthService:
                 department_name=employee.department.name if employee.department else "",
                 allowed_source_ids=allowed_ids,
                 project_source_ids=project_source_ids,
+                project_ids=project_ids,
                 permissions=permissions,
             )
 
@@ -177,6 +184,7 @@ class MCPAuthService:
             department_name=employee.department.name if employee.department else "",
             allowed_source_ids=[],  # empty = no access
             project_source_ids=project_source_ids,
+            project_ids=project_ids,
             permissions=permissions,
         )
 
@@ -205,28 +213,41 @@ class MCPAuthService:
 
         return global_ids + dept_ids
 
-    async def _resolve_project_sources(self, employee_id: uuid.UUID) -> list[str]:
-        """Collect source IDs from all active projects the employee is a member of."""
-        member_stmt = select(ProjectMember.project_id).where(
-            ProjectMember.employee_id == employee_id
-        )
-        member_result = await self.db.execute(member_stmt)
-        project_ids = [r[0] for r in member_result.all()]
+    async def _resolve_projects(
+        self, employee_id: uuid.UUID,
+    ) -> tuple[list[str], list[str]]:
+        """Resolve workspace memberships into (project_ids, project_source_ids).
 
-        if not project_ids:
-            return []
-
+        - project_ids: UUIDs (as strings) of every ACTIVE workspace the
+          employee is a member of. Used by the wiki layer to include
+          project-scoped wiki pages in search/list/read.
+        - project_source_ids: source UUIDs linked to those workspaces.
+        """
         from app.database.models import Project
-        source_stmt = (
-            select(ProjectSource.source_id)
-            .join(Project, Project.id == ProjectSource.project_id)
+
+        # Active workspaces this user is a member of.
+        active_proj_stmt = (
+            select(ProjectMember.project_id)
+            .join(Project, Project.id == ProjectMember.project_id)
             .where(
-                ProjectSource.project_id.in_(project_ids),
+                ProjectMember.employee_id == employee_id,
                 Project.status == "active",
             )
         )
+        result = await self.db.execute(active_proj_stmt)
+        proj_uuids = [r[0] for r in result.all()]
+
+        if not proj_uuids:
+            return [], []
+
+        project_ids = [str(p) for p in proj_uuids]
+
+        source_stmt = select(ProjectSource.source_id).where(
+            ProjectSource.project_id.in_(proj_uuids)
+        )
         source_result = await self.db.execute(source_stmt)
-        return [str(r[0]) for r in source_result.all()]
+        project_source_ids = [str(r[0]) for r in source_result.all()]
+        return project_ids, project_source_ids
 
     # --- Token Management ---
 
