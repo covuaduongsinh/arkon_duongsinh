@@ -206,7 +206,7 @@ export default function WikiIndexPage() {
             )}
             {user && (
               <Link
-                href="/wiki/queue"
+                href="/wiki/review"
                 className="inline-flex h-8 items-center gap-1.5 px-2.5 rounded-lg text-sm font-medium border border-border bg-background hover:bg-muted transition-colors"
                 title="Drafts you authored and drafts waiting for your review"
               >

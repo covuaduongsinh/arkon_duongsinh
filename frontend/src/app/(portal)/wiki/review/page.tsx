@@ -82,6 +82,10 @@ export default function WikiReviewPage() {
   const status = (searchParams.get("status") as StatusFilter) || "pending";
   const scopeMode: ScopeMode = searchParams.get("mine") === "true" ? "mine" : "review";
   const selectedId = searchParams.get("draft");
+  // Client-side scope filter. Encoded as "scopeType:scopeId" (or just
+  // "scopeType" for global/no-id). Empty = all scopes. Filter runs over the
+  // already-loaded drafts list — no extra API call needed.
+  const scopeKey = searchParams.get("scope") || "";
 
   const [drafts, setDrafts] = React.useState<DraftResponse[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -146,12 +150,59 @@ export default function WikiReviewPage() {
     load();
   }, [load]);
 
+  // ---------- Scope filter (client-side over loaded drafts) ----------
+
+  // Unique scope options derived from the loaded drafts. Keyed as
+  // "scopeType:scopeId" (or "global" for the global scope). Stable order:
+  // global first, then alpha by label.
+  const scopeOptions = React.useMemo(() => {
+    const seen = new Map<string, { key: string; label: string }>();
+    for (const d of drafts) {
+      const type = d.page_scope_type || "global";
+      const id = d.page_scope_id || "";
+      const key = type === "global" ? "global" : `${type}:${id}`;
+      if (seen.has(key)) continue;
+      const label =
+        type === "global"
+          ? "Global"
+          : `${d.page_scope_name || id}${d.page_scope_name ? "" : ""} · ${type}`;
+      seen.set(key, { key, label });
+    }
+    const arr = Array.from(seen.values());
+    arr.sort((a, b) => {
+      if (a.key === "global") return -1;
+      if (b.key === "global") return 1;
+      return a.label.localeCompare(b.label);
+    });
+    return arr;
+  }, [drafts]);
+
+  const filteredDrafts = React.useMemo(() => {
+    if (!scopeKey) return drafts;
+    return drafts.filter((d) => {
+      const type = d.page_scope_type || "global";
+      const id = d.page_scope_id || "";
+      const key = type === "global" ? "global" : `${type}:${id}`;
+      return key === scopeKey;
+    });
+  }, [drafts, scopeKey]);
+
+  // If the current selection is filtered out, snap to the first visible draft.
+  React.useEffect(() => {
+    if (filteredDrafts.length === 0) return;
+    if (!selectedId || !filteredDrafts.some((d) => d.id === selectedId)) {
+      updateUrl({ draft: filteredDrafts[0].id });
+    }
+    // updateUrl is stable; intentionally omit to avoid re-running on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredDrafts, selectedId]);
+
   // ---------- Active draft + page content ----------
 
   const activeDraft = React.useMemo(() => {
-    if (!selectedId) return drafts[0] ?? null;
-    return drafts.find((d) => d.id === selectedId) ?? drafts[0] ?? null;
-  }, [drafts, selectedId]);
+    if (!selectedId) return filteredDrafts[0] ?? null;
+    return filteredDrafts.find((d) => d.id === selectedId) ?? filteredDrafts[0] ?? null;
+  }, [filteredDrafts, selectedId]);
 
   // When active draft has a fresh liveDraft snapshot (same id), prefer it for
   // AI status. Falls back to the list row otherwise.
@@ -207,16 +258,16 @@ export default function WikiReviewPage() {
 
   const selectIndex = React.useCallback(
     (idx: number) => {
-      if (drafts.length === 0) return;
-      const clamped = Math.max(0, Math.min(drafts.length - 1, idx));
-      updateUrl({ draft: drafts[clamped].id });
+      if (filteredDrafts.length === 0) return;
+      const clamped = Math.max(0, Math.min(filteredDrafts.length - 1, idx));
+      updateUrl({ draft: filteredDrafts[clamped].id });
     },
-    [drafts, updateUrl],
+    [filteredDrafts, updateUrl],
   );
 
   const activeIdx = React.useMemo(
-    () => (draft ? drafts.findIndex((d) => d.id === draft.id) : -1),
-    [drafts, draft],
+    () => (draft ? filteredDrafts.findIndex((d) => d.id === draft.id) : -1),
+    [filteredDrafts, draft],
   );
 
   const goNext = React.useCallback(() => selectIndex(activeIdx + 1), [activeIdx, selectIndex]);
@@ -231,20 +282,19 @@ export default function WikiReviewPage() {
   }, []);
 
   const advanceAfterAction = React.useCallback(() => {
-    // Remove the just-actioned draft from the list and pick the next one.
+    // Remove the just-actioned draft and pick the next one in the *visible*
+    // (filtered) list — activeIdx is indexed against filteredDrafts.
     if (!draft) return;
-    setDrafts((prev) => {
-      const next = prev.filter((d) => d.id !== draft.id);
-      if (next.length === 0) {
-        updateUrl({ draft: null });
-      } else {
-        const nextIdx = Math.min(activeIdx, next.length - 1);
-        updateUrl({ draft: next[nextIdx].id });
-      }
-      return next;
-    });
+    const nextVisible = filteredDrafts.filter((d) => d.id !== draft.id);
+    setDrafts((prev) => prev.filter((d) => d.id !== draft.id));
+    if (nextVisible.length === 0) {
+      updateUrl({ draft: null });
+    } else {
+      const nextIdx = Math.min(activeIdx, nextVisible.length - 1);
+      updateUrl({ draft: nextVisible[nextIdx].id });
+    }
     resetForm();
-  }, [draft, activeIdx, updateUrl, resetForm]);
+  }, [draft, filteredDrafts, activeIdx, updateUrl, resetForm]);
 
   const handleApprove = React.useCallback(async () => {
     if (!draft) return;
@@ -420,9 +470,27 @@ export default function WikiReviewPage() {
             ))}
           </select>
 
+          {scopeOptions.length > 1 && (
+            <select
+              value={scopeKey}
+              onChange={(e) => updateUrl({ scope: e.target.value || null, draft: null })}
+              className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:border-ring"
+              title="Filter by scope"
+            >
+              <option value="">All scopes ({drafts.length})</option>
+              {scopeOptions.map((o) => (
+                <option key={o.key} value={o.key}>{o.label}</option>
+              ))}
+            </select>
+          )}
+
           <div className="flex items-center justify-between text-[11px] text-muted-foreground">
             <span>
-              {loading ? "Loading…" : `${drafts.length} draft${drafts.length === 1 ? "" : "s"}`}
+              {loading
+                ? "Loading…"
+                : scopeKey
+                  ? `${filteredDrafts.length} of ${drafts.length} draft${drafts.length === 1 ? "" : "s"}`
+                  : `${drafts.length} draft${drafts.length === 1 ? "" : "s"}`}
             </span>
             <button
               type="button"
@@ -436,17 +504,21 @@ export default function WikiReviewPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto min-h-0">
-          {loading ? null : drafts.length === 0 ? (
+          {loading ? null : filteredDrafts.length === 0 ? (
             <div className="p-4">
               <EmptyState
                 icon="inbox"
                 title="Empty queue"
-                description={`No drafts in ${status} state.`}
+                description={
+                  scopeKey && drafts.length > 0
+                    ? "No drafts in this scope. Switch to 'All scopes' to see others."
+                    : `No drafts in ${status} state.`
+                }
               />
             </div>
           ) : (
             <ul className="divide-y divide-border">
-              {drafts.map((d) => {
+              {filteredDrafts.map((d) => {
                 const active = draft?.id === d.id;
                 return (
                   <li key={d.id}>
@@ -554,7 +626,7 @@ export default function WikiReviewPage() {
                   </p>
                 </div>
                 <div className="text-[11px] text-muted-foreground tabular-nums shrink-0">
-                  {activeIdx + 1} / {drafts.length}
+                  {activeIdx + 1} / {filteredDrafts.length}
                 </div>
               </div>
 

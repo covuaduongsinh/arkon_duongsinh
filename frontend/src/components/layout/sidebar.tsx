@@ -48,6 +48,7 @@ const navSections: NavSection[] = [
     items: [
       { label: "Documents", href: "/knowledge", icon: "description", requiredPermissions: ["doc:read:own_dept", "doc:read:all"] },
       { label: "Wiki", href: "/wiki", icon: "auto_stories", requiredPermissions: ["wiki:read:own_dept", "wiki:read:all"] },
+      { label: "Reviews", href: "/wiki/review", icon: "fact_check", requiredPermissions: ["wiki:read:own_dept", "wiki:read:all"] },
       { label: "AI Skills", href: "/skills", icon: "bolt", requiredPermissions: ["skill:read:own_dept", "skill:read:all"] },
     ],
   },
@@ -95,8 +96,20 @@ function useGroupToggle(groupId: string, defaultOpen: boolean) {
 
 /* ─── Helpers ─── */
 
+/** All static nav hrefs — used by isActive to pick the longest prefix match
+ *  so nested links (e.g. /wiki/review) don't also activate their parent (/wiki). */
+const ALL_NAV_HREFS = navSections.flatMap((s) => s.items.map((i) => i.href));
+
 function isActive(href: string, pathname: string) {
-  return href === "/" ? pathname === "/" : pathname.startsWith(href);
+  if (href === "/") return pathname === "/";
+  if (!(pathname === href || pathname.startsWith(href + "/"))) return false;
+  // A more specific sibling matched — defer to it.
+  return !ALL_NAV_HREFS.some(
+    (other) =>
+      other !== href &&
+      other.startsWith(href + "/") &&
+      (pathname === other || pathname.startsWith(other + "/")),
+  );
 }
 
 /** Pick a color for workspace icon based on workspace type */
