@@ -5,11 +5,24 @@ import { WikiPageTree } from "@/components/wiki/wiki-page-tree";
 import { WikiContent } from "@/components/wiki/wiki-content";
 import { WikiSidebarRight } from "@/components/wiki/wiki-backlinks";
 import { ScopeBadge } from "@/components/shared/scope-badge";
-import { WikiPageDetail, WikiPageSummary } from "@/types/wiki";
+import { WikiCreatePageDialog } from "@/components/wiki/wiki-create-page-dialog";
+import { WikiPageDetail, WikiPageSummary, WikiScope } from "@/types/wiki";
+import { useAuth } from "@/lib/auth";
 import { Project } from "./types";
 import { WIKI_TYPE_TABS } from "./utils";
 import { WikiDetailInline } from "./wiki-detail-inline";
 import { WikiGraphInline } from "./wiki-graph-inline";
+
+const WORKSPACE_ROLE_LEVEL: Record<string, number> = {
+  viewer: 0,
+  contributor: 1,
+  editor: 2,
+  admin: 3,
+};
+function roleAtLeast(role: string | null, min: string): boolean {
+  if (!role) return false;
+  return (WORKSPACE_ROLE_LEVEL[role] ?? -1) >= (WORKSPACE_ROLE_LEVEL[min] ?? 999);
+}
 
 type Props = {
   project: Project;
@@ -23,6 +36,23 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd }: Props)
   const [selectedWikiSlug, setSelectedWikiSlug] = useState<string | null>(null);
   const [selectedWikiPage, setSelectedWikiPage] = useState<WikiPageDetail | null>(null);
   const [showGraph, setShowGraph] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  // Workspace scope is the only scope the create dialog can target from here —
+  // proposing a global/department page belongs on the global /wiki page.
+  const { user, getWorkspaceRole } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const workspaceRole = getWorkspaceRole(project.id);
+  const createMode: "direct" | "propose" | null = useMemo(() => {
+    if (!user) return null;
+    if (isAdmin || roleAtLeast(workspaceRole, "editor")) return "direct";
+    if (roleAtLeast(workspaceRole, "contributor")) return "propose";
+    return null;
+  }, [user, isAdmin, workspaceRole]);
+  const workspaceScope: WikiScope = useMemo(
+    () => ({ scope_type: "project", scope_id: project.id, name: project.name }),
+    [project.id, project.name],
+  );
 
   // Compute wiki counts
   const wikiTypeCounts = useMemo(() => {
@@ -87,6 +117,17 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd }: Props)
                 icon="auto_stories"
                 title="No wiki pages yet"
                 description="Upload documents in this workspace to automatically compile knowledge into wiki pages."
+                action={
+                  createMode && (
+                    <button
+                      onClick={() => setCreateOpen(true)}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border border-border bg-background hover:bg-muted transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-base">add</span>
+                      {createMode === "direct" ? "New page" : "Propose page"}
+                    </button>
+                  )
+                }
               />
             ) : (
               <>
@@ -128,6 +169,20 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd }: Props)
                           })}
                         </span>
                       </div>
+                    )}
+                    {createMode && (
+                      <button
+                        onClick={() => setCreateOpen(true)}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border border-border bg-card hover:bg-muted transition-colors shadow-sahara"
+                        title={
+                          createMode === "direct"
+                            ? `Create a new page in ${project.name}`
+                            : `Propose a new page in ${project.name} (reviewer approves)`
+                        }
+                      >
+                        <span className="material-symbols-outlined text-base">add</span>
+                        {createMode === "direct" ? "New page" : "Propose page"}
+                      </button>
                     )}
                     <button
                       onClick={() => setShowGraph(true)}
@@ -208,6 +263,17 @@ export function WikiTab({ project, wikiPages, wikiLoading, wikiIndexMd }: Props)
         <div className="hidden lg:flex shrink-0 overflow-hidden">
           <WikiSidebarRight slug={selectedWikiSlug} page={selectedWikiPage} />
         </div>
+      )}
+
+      {/* Create / propose dialog — scope locked to this workspace */}
+      {createMode && (
+        <WikiCreatePageDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          mode={createMode}
+          defaultScope={workspaceScope}
+          scopes={[workspaceScope]}
+        />
       )}
     </div>
   );
