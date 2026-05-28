@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
 
 from app.config import settings
@@ -110,6 +111,49 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- MCP OAuth discovery gate ---
+# RFC 9728: when a request hits the protected resource (/mcp) without a
+# Bearer token, return 401 with a WWW-Authenticate header pointing at the
+# OAuth Protected Resource Metadata. This is the signal Claude Desktop (and
+# other MCP clients) look for to auto-discover the OAuth flow and surface a
+# "Connect" button instead of requiring the user to paste a Bearer token by
+# hand.
+#
+# Behavior:
+#   - No Authorization header at all  -> 401 + WWW-Authenticate (triggers OAuth)
+#   - Authorization: Bearer <token>   -> pass through (FastMCP + tool-level
+#                                        checks handle validity / scope)
+#
+# We intentionally do NOT validate the token here. Invalid tokens still flow
+# into the tool layer so existing helpful error messages are preserved.
+
+@app.middleware("http")
+async def _mcp_oauth_gate_mw(request, call_next):
+    path = request.url.path
+    if path == "/mcp" or path.startswith("/mcp/"):
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            base = str(request.base_url).rstrip("/")
+            resource_metadata_url = f"{base}/.well-known/oauth-protected-resource"
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "unauthorized",
+                    "error_description": (
+                        "This MCP endpoint requires OAuth 2.0 or a Bearer token. "
+                        "See the WWW-Authenticate header for OAuth discovery."
+                    ),
+                },
+                headers={
+                    "WWW-Authenticate": (
+                        f'Bearer realm="Arkon MCP", '
+                        f'resource_metadata="{resource_metadata_url}"'
+                    ),
+                },
+            )
+    return await call_next(request)
 
 
 # --- Notification dispatch middleware ---
