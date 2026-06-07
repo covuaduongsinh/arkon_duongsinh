@@ -33,7 +33,7 @@ export function NotificationChannelsCard() {
 
   const refresh = React.useCallback(() => {
     setLoading(true);
-    api<Settings>("/api/admin-settings/settings")
+    api<Settings>("/api/settings")
       .then((s) => setSettings(s || {}))
       .catch(() => setSettings({}))
       .finally(() => setLoading(false));
@@ -56,7 +56,7 @@ export function NotificationChannelsCard() {
         const v = settings[k];
         if (v != null) payload[k] = v;
       }
-      await api("/api/admin-settings/settings", {
+      await api("/api/settings", {
         method: "PUT",
         body: { settings: payload },
       });

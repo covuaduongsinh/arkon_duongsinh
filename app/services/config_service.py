@@ -81,6 +81,20 @@ ALL_CONFIG_KEYS = [
     "vision_provider",
     "vision_model_id",
 
+    # --- Notification channels: Email (SMTP) ---
+    "smtp_enabled",
+    "smtp_host",
+    "smtp_port",
+    "smtp_username",
+    "smtp_password",
+    "smtp_from",
+    "smtp_use_tls",
+
+    # --- Notification channels: Outbound webhook ---
+    "webhook_enabled",
+    "webhook_url",
+    "webhook_secret",
+
     # --- System ---
     "session_timeout_minutes",
 
