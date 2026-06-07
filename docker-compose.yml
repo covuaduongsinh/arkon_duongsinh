@@ -15,7 +15,9 @@ x-backend: &backend
     minio:
       condition: service_healthy
   volumes:
-    - ./temp_uploads:/app/temp_uploads
+    # Named volume (not host bind mount) so it inherits the image's
+    # appuser-writable permissions instead of root-owned host dir perms.
+    - temp_uploads:/app/temp_uploads
 
 services:
   # ── Infrastructure ────────────────────────────────────────────
@@ -141,3 +143,4 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  temp_uploads:

@@ -23,6 +23,10 @@ COPY skills/ ./skills/
 COPY entrypoint.sh ./
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
+# Pre-create the writable scratch dir for skill ZIP uploads so the
+# non-root appuser (and the skills worker) can always write to it.
+RUN mkdir -p /app/temp_uploads && chmod 777 /app/temp_uploads
+
 RUN groupadd -r appuser && useradd -r -g appuser appuser \
     && chown -R appuser:appuser /app
 
