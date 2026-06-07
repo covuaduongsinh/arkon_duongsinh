@@ -41,6 +41,7 @@ ALL_PERMISSIONS: list[str] = [
     "org:roles:read", "org:roles:manage",
     "org:settings:read", "org:settings:manage",
     "org:audit:read",
+    "org:backup:manage",
 
     # Workspaces
     "workspace:view:all",
@@ -119,6 +120,7 @@ PERMISSION_GROUPS: dict[str, list[str]] = {
         "org:roles:read", "org:roles:manage",
         "org:settings:read", "org:settings:manage",
         "org:audit:read",
+        "org:backup:manage",
     ],
     "Workspaces": [
         "workspace:view:all",
@@ -166,6 +168,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "org:settings:read":      "View system settings",
     "org:settings:manage":    "Manage system settings",
     "org:audit:read":         "View audit log",
+    "org:backup:manage":      "Export, import & restore backups",
 
     # Workspaces
     "workspace:view:all":     "View all workspaces (admin override)",
@@ -213,6 +216,7 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     "org:settings:read":      "View system configuration (AI providers, masked API keys). Read-only access.",
     "org:settings:manage":    "Modify system settings such as AI provider, model, and API keys. Admin-level privilege.",
     "org:audit:read":         "View the audit log tracking all system activities.",
+    "org:backup:manage":      "Create and download data backups, and import/restore bundles or full snapshots. Highly sensitive — can overwrite or wipe data.",
 
     # Workspaces
     "workspace:view:all":     "View all workspaces even without being a member. By default, only admins have this.",

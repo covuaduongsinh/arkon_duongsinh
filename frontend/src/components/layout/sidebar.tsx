@@ -59,10 +59,11 @@ const navSections: NavSection[] = [
   {
     id: "system",
     label: "System",
-    requiredPermissions: ["org:audit:read", "org:settings:read", "org:settings:manage"],
+    requiredPermissions: ["org:audit:read", "org:settings:read", "org:settings:manage", "org:backup:manage"],
     items: [
       { label: "Audit Log", href: "/audit", icon: "policy", requiredPermissions: ["org:audit:read"] },
       { label: "Settings", href: "/settings", icon: "settings", requiredPermissions: ["org:settings:read"] },
+      { label: "Backup & Restore", href: "/admin/backup", icon: "backup", requiredPermissions: ["org:backup:manage"] },
     ],
   },
 ];
