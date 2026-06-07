@@ -100,17 +100,10 @@ async def _get_allowed_source_ids(identity, session: Optional[AsyncSession] = No
 # ---------------------------------------------------------------------------
 
 async def _can_review_page(session: AsyncSession, employee, page) -> bool:
-    """Editor+ in the page's workspace, or wiki:write:all globally, or admin."""
-    from app.services.permission_engine import (
-        _get_user_permissions,
-        get_workspace_role,
-        workspace_role_can,
-    )
+    """wiki:write:all globally, or admin."""
+    from app.services.permission_engine import _get_user_permissions
     if employee.role == "admin":
         return True
-    if page.scope_type == "project" and page.scope_id:
-        role = await get_workspace_role(session, employee, page.scope_id)
-        return bool(role) and workspace_role_can(role, "editor")
     perms = _get_user_permissions(employee)
     return "wiki:write:all" in perms
 
@@ -119,25 +112,17 @@ async def _can_contribute_to_page(session: AsyncSession, employee, page) -> bool
     """Permission to propose an edit on `page` via MCP.
 
     Mirrors REST `_can_propose`:
-    - Project pages: workspace contributor+.
     - Department pages: wiki:write:all, or wiki:write:own_dept restricted to
       the employee's own department.
     - Global pages: any wiki:write permission.
     """
     from app.services.permission_engine import (
         _get_user_permissions,
-        get_workspace_role,
         has_any_permission,
-        workspace_role_can,
     )
     if employee.role == "admin":
         return True
     perms = _get_user_permissions(employee)
-    if page.scope_type == "project" and page.scope_id:
-        role = await get_workspace_role(session, employee, page.scope_id)
-        if not role:
-            return False
-        return workspace_role_can(role, "contributor")
     if page.scope_type == "department" and page.scope_id:
         if "wiki:write:all" in perms:
             return True
@@ -156,8 +141,8 @@ async def _format_oos_hint(session: AsyncSession, oos_hits: list) -> str:
     """Aggregate out-of-scope search hits into a short "ask for access" hint.
 
     Intentionally leaks ONLY (count, scope_type, scope_name) — never titles
-    or summaries — to avoid information disclosure across department or
-    workspace boundaries. A page title can itself be sensitive
+    or summaries — to avoid information disclosure across department
+    boundaries. A page title can itself be sensitive
     (e.g. "Q1 layoffs — Engineering").
     """
     if not oos_hits:
@@ -244,8 +229,6 @@ def register_tools(mcp: FastMCP):
         Returns:
             A ranked list of wiki pages and source matches with similarity scores.
         """
-        import uuid as uuid_mod
-
         identity, err = await _get_identity()
         if err:
             return err
@@ -258,8 +241,6 @@ def register_tools(mcp: FastMCP):
         from app.database import async_session_factory
         from app.services import wiki_service
 
-        proj_uuids = [uuid_mod.UUID(p) for p in identity.project_ids] or None
-
         async with async_session_factory() as session:
             registry = ProviderRegistry(session)
             embedding_provider = await registry.get_embedding(task="search_query")
@@ -271,7 +252,6 @@ def register_tools(mcp: FastMCP):
                 top_k=top_k,
                 allowed_kt_slugs=identity.allowed_knowledge_types,
                 department_ids=identity.department_ids,
-                project_ids=proj_uuids,
                 all_scopes=identity.is_admin,
             )
 
@@ -295,7 +275,6 @@ def register_tools(mcp: FastMCP):
                     query_embedding=query_embedding,
                     top_k=5,
                     department_ids=identity.department_ids,
-                    project_ids=proj_uuids,
                     inverse_scope=True,
                 )
                 oos_hint = await _format_oos_hint(session, oos_hits)
@@ -507,8 +486,6 @@ def register_tools(mcp: FastMCP):
         Returns:
             Slug, title, summary, type, and KnowledgeType slugs for each page.
         """
-        import uuid as uuid_mod
-
         identity, err = await _get_identity()
         if err:
             return err
@@ -516,8 +493,6 @@ def register_tools(mcp: FastMCP):
 
         from app.database import async_session_factory
         from app.services import wiki_service
-
-        proj_uuids = [uuid_mod.UUID(p) for p in identity.project_ids] or None
 
         async with async_session_factory() as session:
             pages = await wiki_service.list_pages(
@@ -529,7 +504,6 @@ def register_tools(mcp: FastMCP):
                 limit=limit,
                 offset=offset,
                 department_ids=identity.department_ids,
-                project_ids=proj_uuids,
                 all_scopes=identity.is_admin,
             )
 
@@ -1022,10 +996,10 @@ def register_tools(mcp: FastMCP):
             slug: Target page slug (e.g. "concept/fire-safety").
             content_md: The full proposed content in Markdown (max 50,000 chars).
             note: Optional one-line explanation of what you changed and why.
-            scope_type: Optional — "global", "department", or "project". If the
+            scope_type: Optional — "global" or "department". If the
                 same slug exists in multiple scopes you MUST pass this to avoid
                 ambiguity. Defaults to "global".
-            scope_id: Required UUID when scope_type is "department" or "project".
+            scope_id: Required UUID when scope_type is "department".
             base_version: Version of the page this edit is based on. Captured
                 automatically from read_wiki_page; passing the wrong value will
                 cause the reviewer to see a conflict warning.
@@ -1056,8 +1030,8 @@ def register_tools(mcp: FastMCP):
                 sid = _uuid.UUID(scope_id)
             except ValueError:
                 return "Error: scope_id must be a valid UUID."
-        if scope_type and scope_type not in ("global", "department", "project"):
-            return "Error: scope_type must be one of global, department, project."
+        if scope_type and scope_type not in ("global", "department"):
+            return "Error: scope_type must be one of global, department."
 
         async with async_session_factory() as session:
             if scope_type:
@@ -1086,8 +1060,6 @@ def register_tools(mcp: FastMCP):
                 return "Error: employee not found."
 
             if not await _can_contribute_to_page(session, employee, page):
-                if page.scope_type == "project" and page.scope_id:
-                    return f"Error: requires contributor role or above to propose edits to '{slug}'."
                 return "Error: insufficient permission to propose wiki edits."
 
             effective_base = base_version if base_version is not None else page.version
@@ -1143,10 +1115,10 @@ def register_tools(mcp: FastMCP):
             slug: Target page slug.
             content_md: Full new content in Markdown.
             change_note: Optional one-line description of the change.
-            scope_type: Optional — "global", "department", or "project". If the
+            scope_type: Optional — "global" or "department". If the
                 same slug exists in multiple scopes you MUST pass this. Defaults
                 to "global" when only one match exists.
-            scope_id: Required UUID when scope_type is "department" or "project".
+            scope_id: Required UUID when scope_type is "department".
         """
         import uuid as _uuid
 
@@ -1172,8 +1144,8 @@ def register_tools(mcp: FastMCP):
                 sid = _uuid.UUID(scope_id)
             except ValueError:
                 return "Error: scope_id must be a valid UUID."
-        if scope_type and scope_type not in ("global", "department", "project"):
-            return "Error: scope_type must be one of global, department, project."
+        if scope_type and scope_type not in ("global", "department"):
+            return "Error: scope_type must be one of global, department."
 
         async with async_session_factory() as session:
             if scope_type:
@@ -1201,9 +1173,7 @@ def register_tools(mcp: FastMCP):
                 return "Error: employee not found."
 
             if not await _can_review_page(session, employee, page):
-                if page.scope_type == "project" and page.scope_id:
-                    return f"Error: requires editor role or above to directly edit '{slug}'."
-                return "Error: requires wiki:write:all permission to directly edit global wiki pages. Use propose_wiki_edit() instead."
+                return "Error: requires wiki:write:all permission to directly edit wiki pages. Use propose_wiki_edit() instead."
 
             await wiki_service.direct_edit_page(session, page, employee.id, content_md.strip(), change_note)
             edited_scope_type = page.scope_type or "global"
@@ -1229,32 +1199,25 @@ def register_tools(mcp: FastMCP):
     @kb_tool(mcp, requires=CAN_REVIEW_WIKI)
     @logged_tool("list_pending_drafts")
     async def list_pending_drafts(
-        workspace_id: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> str:
         """
-        List pending wiki drafts awaiting editor review. Permission filtering
-        is enforced at the SQL level so pagination is correct.
+        List pending wiki drafts awaiting editor review.
 
         Args:
-            workspace_id: Optional. Filter to a specific workspace UUID.
-                          Omit to see all accessible pending drafts.
             limit: Max drafts to return (default: 50).
             offset: Number of drafts to skip for pagination (default: 0).
         """
-        from sqlalchemy import and_, select
+        from sqlalchemy import select
         from sqlalchemy.orm import selectinload
 
         from app.database import async_session_factory
         from app.database.models import (
             Employee,
-            ProjectMember,
             WikiPage,
             WikiPageDraft,
-            WorkspaceRole,
         )
-        from app.services.permission_engine import _get_user_permissions
 
         identity, err = await _get_identity()
         if err:
@@ -1265,10 +1228,6 @@ def register_tools(mcp: FastMCP):
             employee = await session.get(Employee, identity.employee_id)
             if not employee:
                 return "Error: employee not found."
-
-            perms = _get_user_permissions(employee)
-            is_admin = employee.role == "admin"
-            can_global = is_admin or "wiki:write:all" in perms
 
             stmt = (
                 select(WikiPageDraft)
@@ -1282,20 +1241,6 @@ def register_tools(mcp: FastMCP):
                 .offset(offset)
                 .limit(limit)
             )
-
-            if not can_global:
-                editor_levels = [WorkspaceRole.EDITOR.value, WorkspaceRole.ADMIN.value]
-                workspace_pages = select(ProjectMember.project_id).where(
-                    ProjectMember.employee_id == employee.id,
-                    ProjectMember.role.in_(editor_levels),
-                )
-                stmt = stmt.where(and_(
-                    WikiPage.scope_type == "project",
-                    WikiPage.scope_id.in_(workspace_pages),
-                ))
-
-            if workspace_id:
-                stmt = stmt.where(WikiPage.scope_id == workspace_id)
 
             drafts = (await session.execute(stmt)).scalars().all()
 
@@ -1776,8 +1721,8 @@ def register_tools(mcp: FastMCP):
             content_md: Full Markdown content (max 50,000 chars).
             page_type: One of entity | concept | source | topic.
             knowledge_type_slugs: KB taxonomy tags (controls RBAC visibility).
-            scope_type: "global" | "department" | "project".
-            scope_id: Required UUID when scope_type is department or project.
+            scope_type: "global" | "department".
+            scope_id: Required UUID when scope_type is department.
             note: One-line description of why this page should exist.
         """
         import uuid as _uuid
@@ -1803,8 +1748,8 @@ def register_tools(mcp: FastMCP):
             return "Error: slug must not contain whitespace."
         if page_type not in wiki_service.PAGE_TYPES:
             return f"Error: page_type must be one of {sorted(wiki_service.PAGE_TYPES)}."
-        if scope_type not in ("global", "department", "project"):
-            return "Error: scope_type must be global, department, or project."
+        if scope_type not in ("global", "department"):
+            return "Error: scope_type must be global or department."
 
         sid: Optional[_uuid.UUID] = None
         if scope_id:
@@ -1822,16 +1767,10 @@ def register_tools(mcp: FastMCP):
             if employee.role != "admin":
                 from app.services.permission_engine import (
                     _get_user_permissions,
-                    get_workspace_role,
                     has_any_permission,
-                    workspace_role_can,
                 )
                 perms = _get_user_permissions(employee)
-                if scope_type == "project" and sid:
-                    role = await get_workspace_role(session, employee, sid)
-                    if not role or not workspace_role_can(role, "contributor"):
-                        return "Error: requires contributor role or above in this workspace."
-                elif scope_type == "department" and sid:
+                if scope_type == "department" and sid:
                     if "wiki:write:all" not in perms and not (
                         "wiki:write:own_dept" in perms and sid in employee.department_ids
                     ):
@@ -1899,8 +1838,8 @@ def register_tools(mcp: FastMCP):
             content_md: Full Markdown content.
             page_type: entity | concept | source | topic.
             knowledge_type_slugs: KB taxonomy tags.
-            scope_type: "global" | "department" | "project".
-            scope_id: UUID when scope_type is department or project.
+            scope_type: "global" | "department".
+            scope_id: UUID when scope_type is department.
         """
         import uuid as _uuid
 
@@ -1922,8 +1861,8 @@ def register_tools(mcp: FastMCP):
             return "Error: slug must not contain whitespace."
         if page_type not in wiki_service.PAGE_TYPES:
             return f"Error: page_type must be one of {sorted(wiki_service.PAGE_TYPES)}."
-        if scope_type not in ("global", "department", "project"):
-            return "Error: scope_type must be global, department, or project."
+        if scope_type not in ("global", "department"):
+            return "Error: scope_type must be global or department."
 
         sid: Optional[_uuid.UUID] = None
         if scope_id:
@@ -1937,21 +1876,12 @@ def register_tools(mcp: FastMCP):
             if not employee:
                 return "Error: employee not found."
 
-            # Permission: editor+ in workspace, wiki:write:all globally, or admin.
+            # Permission: wiki:write:all globally, or admin.
             if employee.role != "admin":
-                from app.services.permission_engine import (
-                    _get_user_permissions,
-                    get_workspace_role,
-                    workspace_role_can,
-                )
-                if scope_type == "project" and sid:
-                    role = await get_workspace_role(session, employee, sid)
-                    if not role or not workspace_role_can(role, "editor"):
-                        return f"Error: requires editor role or above in this workspace."
-                else:
-                    perms = _get_user_permissions(employee)
-                    if "wiki:write:all" not in perms:
-                        return "Error: requires wiki:write:all permission. Use propose_wiki_create() instead."
+                from app.services.permission_engine import _get_user_permissions
+                perms = _get_user_permissions(employee)
+                if "wiki:write:all" not in perms:
+                    return "Error: requires wiki:write:all permission. Use propose_wiki_create() instead."
 
             existing = await wiki_service.get_page_by_slug(
                 session, slug, scope_type=scope_type, scope_id=sid,
