@@ -121,6 +121,18 @@ class WikiDirectCreateRequest(BaseModel):
         return v
 
 
+class WikiMovePageRequest(BaseModel):
+    target_scope_type: str
+    target_scope_id: Optional[uuid.UUID] = None
+
+    @field_validator("target_scope_type")
+    @classmethod
+    def scope_known(cls, v: str) -> str:
+        if v not in ("global", "department"):
+            raise ValueError("target_scope_type must be global or department")
+        return v
+
+
 class WikiRevisionSummary(BaseModel):
     id: uuid.UUID
     version: int
@@ -490,6 +502,58 @@ async def direct_edit_wiki_page(
         scope_type=edited_scope_type,
         scope_id=edited_scope_id,
     )
+    await db.commit()
+    await db.refresh(page)
+
+    backlinks = await wiki_service.get_backlinks(db, slug, page.scope_type, page.scope_id)
+    outlinks = await wiki_service.get_outlinks(db, slug, page.scope_type or "global", page.scope_id)
+    return _detail(page, backlinks, outlinks)
+
+
+@router.post("/wiki/pages/{slug:path}/move", response_model=WikiPageDetail)
+async def move_wiki_page(
+    slug: str,
+    body: WikiMovePageRequest,
+    scope_type: Optional[str] = Query(None),
+    scope_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user: Employee = Depends(get_current_user),
+):
+    """Move a wiki page to a different scope (global ↔ department).
+
+    Source page is identified by `slug` + optional `scope_type`/`scope_id`
+    query params (same resolution as direct-edit). Target scope is supplied in
+    the request body.
+
+    Permission: wiki:write:all or admin.
+    """
+    if slug in (wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG, wiki_service.HOT_SLUG):
+        raise HTTPException(400, "Cannot move reserved pages")
+
+    if user.role != "admin":
+        perms = _get_user_permissions(user)
+        if "wiki:write:all" not in perms:
+            raise HTTPException(403, "Requires wiki:write:all permission to move wiki pages")
+
+    sid = uuid.UUID(scope_id) if scope_id else None
+    if scope_type:
+        page = await wiki_service.get_page_by_slug(db, slug, scope_type=scope_type, scope_id=sid)
+    else:
+        page = await wiki_service.get_page_by_slug(db, slug, scope_type="global", scope_id=None)
+        if not page:
+            page = await wiki_service.get_page_by_slug_any_scope(db, slug)
+    if not page:
+        raise HTTPException(404, f"Wiki page not found: {slug}")
+
+    if page.scope_type == body.target_scope_type and page.scope_id == body.target_scope_id:
+        raise HTTPException(400, "Page is already in the target scope")
+
+    try:
+        await wiki_service.move_page(db, page, body.target_scope_type, body.target_scope_id, user.id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+    await log_audit(db, user, "update", "wiki_page", str(page.id), reason=f"scope move: {slug}")
     await db.commit()
     await db.refresh(page)
 

@@ -1115,6 +1115,52 @@ async def direct_edit_page(
     return page
 
 
+async def move_page(
+    session: AsyncSession,
+    page: WikiPage,
+    new_scope_type: str,
+    new_scope_id: Optional[uuid.UUID],
+    moved_by: uuid.UUID,
+) -> WikiPage:
+    """
+    Atomically move a wiki page to a different scope (global ↔ department).
+
+    Raises ValueError if the target scope already has a page with the same slug.
+    WikiLinks are preserved — they reference from_page_id (UUID), not scope.
+    Indexes for both the old and new scope are regenerated.
+    """
+    existing = await get_page_by_slug(session, page.slug, new_scope_type, new_scope_id)
+    if existing:
+        raise ValueError(f"Slug '{page.slug}' already exists in target scope")
+
+    old_scope_type = page.scope_type or "global"
+    old_scope_id = page.scope_id
+
+    page.scope_type = new_scope_type
+    page.scope_id = new_scope_id
+    page.version = (page.version or 1) + 1
+    await session.flush()
+
+    await refresh_links(session, page.id, page.slug, page.content_md or "")
+
+    session.add(WikiPageRevision(
+        page_id=page.id,
+        version=page.version,
+        content_md=page.content_md or "",
+        change_type="scope_move",
+        changed_by_id=moved_by,
+        change_note=f"Moved from {old_scope_type} to {new_scope_type}",
+    ))
+    await session.flush()
+
+    await regenerate_index(session, old_scope_type, old_scope_id)
+    await regenerate_index(session, new_scope_type, new_scope_id)
+    await append_log(session, f"Moved [[{page.slug}]] out", old_scope_type, old_scope_id)
+    await append_log(session, f"Moved [[{page.slug}]] in", new_scope_type, new_scope_id)
+
+    return page
+
+
 async def rollback_to_revision(
     session: AsyncSession,
     page: WikiPage,

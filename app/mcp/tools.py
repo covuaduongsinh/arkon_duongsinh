@@ -1192,6 +1192,107 @@ def register_tools(mcp: FastMCP):
 
         return f"Page `{slug}` updated to v{page.version}."
 
+    @kb_tool(mcp, requires=CAN_CREATE_WIKI_DIRECT)
+    @logged_tool("move_wiki_page", query_arg="slug")
+    async def move_wiki_page(
+        slug: str,
+        target_scope_type: str,
+        target_scope_id: Optional[str] = None,
+        scope_type: Optional[str] = None,
+        scope_id: Optional[str] = None,
+    ) -> str:
+        """
+        Move a wiki page from its current scope to a different scope.
+        Requires editor or admin role (wiki:write:all).
+
+        The move is atomic — the page row is updated in place so revision
+        history, wikilinks, and the page UUID are all preserved.
+
+        Args:
+            slug: Slug of the page to move.
+            target_scope_type: Destination scope — "global" or "department".
+            target_scope_id: UUID of the destination department (required when
+                target_scope_type is "department").
+            scope_type: Source scope type to disambiguate same-slug pages. If
+                the slug is unique you can omit this.
+            scope_id: Source scope_id UUID (required when scope_type is
+                "department").
+        """
+        import uuid as _uuid
+
+        from app.database import async_session_factory
+        from app.database.models import Employee
+        from app.services import wiki_service
+
+        identity, err = await _get_identity()
+        if err:
+            return err
+        assert identity is not None
+
+        if not slug:
+            return "Error: slug is required."
+        if slug in ("_index", "_log", "_hot"):
+            return "Error: cannot move reserved pages."
+        if target_scope_type not in ("global", "department"):
+            return "Error: target_scope_type must be one of global, department."
+
+        src_sid: Optional[_uuid.UUID] = None
+        if scope_id:
+            try:
+                src_sid = _uuid.UUID(scope_id)
+            except ValueError:
+                return "Error: scope_id must be a valid UUID."
+
+        tgt_sid: Optional[_uuid.UUID] = None
+        if target_scope_id:
+            try:
+                tgt_sid = _uuid.UUID(target_scope_id)
+            except ValueError:
+                return "Error: target_scope_id must be a valid UUID."
+
+        async with async_session_factory() as session:
+            from sqlalchemy import select
+            from app.database.models import WikiPage
+
+            if scope_type:
+                page = await wiki_service.get_page_by_slug(
+                    session, slug, scope_type=scope_type, scope_id=src_sid,
+                )
+            else:
+                matches = (await session.execute(
+                    select(WikiPage).where(WikiPage.slug == slug)
+                )).scalars().all()
+                if len(matches) > 1:
+                    scopes = ", ".join(
+                        f"{m.scope_type}:{m.scope_id or 'global'}" for m in matches
+                    )
+                    return (
+                        f"Error: slug '{slug}' exists in multiple scopes ({scopes}). "
+                        "Re-call with scope_type and scope_id."
+                    )
+                page = matches[0] if matches else None
+            if not page:
+                return f"Page '{slug}' not found."
+
+            employee = await session.get(Employee, identity.employee_id)
+            if not employee:
+                return "Error: employee not found."
+
+            if not await _can_review_page(session, employee, page):
+                return "Error: requires wiki:write:all permission to move wiki pages."
+
+            if page.scope_type == target_scope_type and page.scope_id == tgt_sid:
+                return f"Page '{slug}' is already in scope {target_scope_type}."
+
+            try:
+                await wiki_service.move_page(session, page, target_scope_type, tgt_sid, employee.id)
+            except ValueError as e:
+                return f"Error: {e}"
+
+            await session.commit()
+
+        return f"Page `{slug}` moved to {target_scope_type} (scope_id={target_scope_id or 'none'})."
+
     # =========================================================================
     # Tier 4 — Review (editor/admin only)
     # =========================================================================
