@@ -1215,7 +1215,6 @@ def register_tools(mcp: FastMCP):
         from app.database import async_session_factory
         from app.database.models import (
             Employee,
-            WikiPage,
             WikiPageDraft,
         )
 
@@ -1231,7 +1230,6 @@ def register_tools(mcp: FastMCP):
 
             stmt = (
                 select(WikiPageDraft)
-                .join(WikiPage, WikiPage.id == WikiPageDraft.page_id)
                 .where(WikiPageDraft.status == "pending")
                 .options(
                     selectinload(WikiPageDraft.page),
@@ -1247,11 +1245,16 @@ def register_tools(mcp: FastMCP):
             lines = []
             for draft in drafts:
                 page = draft.page
-                if not page:
+                if page is not None:
+                    slug_label = f"**{page.slug}**"
+                elif draft.draft_kind == "create":
+                    sm = draft.suggested_metadata or {}
+                    slug_label = f"**{sm.get('slug') or '?'}** (new page)"
+                else:
                     continue
                 author = draft.author
                 lines.append(
-                    f"- **{page.slug}** | Draft `{draft.id}` | "
+                    f"- {slug_label} | Draft `{draft.id}` | "
                     f"by {author.name if author else 'unknown'} | "
                     f"{draft.created_at.strftime('%Y-%m-%d %H:%M')} | "
                     f"note: {draft.note or '(none)'}"
@@ -1306,13 +1309,30 @@ def register_tools(mcp: FastMCP):
                 return "Error: employee not found."
 
             page = draft.page
-            if not page:
+            if not page and draft.draft_kind != "create":
                 return "Error: parent wiki page not found."
 
             if not await _can_review_page(session, employee, page):
                 return "Error: insufficient permission to review drafts for this page."
 
             author = draft.author
+
+        if page is None:
+            # draft_kind='create' — the page does not exist yet; show the
+            # proposed metadata instead of a current-content comparison.
+            sm = draft.suggested_metadata or {}
+            return (
+                f"## Draft `{draft_id}` (new page proposal)\n"
+                f"**Proposed slug:** `{sm.get('slug') or '?'}` — {sm.get('title') or '(no title)'}\n"
+                f"**Page type:** {sm.get('page_type') or 'concept'}\n"
+                f"**Scope:** {sm.get('scope_type') or 'global'}\n"
+                f"**Knowledge types:** {', '.join(sm.get('knowledge_type_slugs') or []) or '(none)'}\n"
+                f"**Author:** {author.name if author else 'unknown'}\n"
+                f"**Status:** {draft.status}\n"
+                f"**Note:** {draft.note or '(none)'}\n\n"
+                f"---\n\n"
+                f"### Proposed content\n\n{draft.content_md}"
+            )
 
         return (
             f"## Draft `{draft_id}`\n"
@@ -1384,7 +1404,7 @@ def register_tools(mcp: FastMCP):
                 return "Error: employee not found."
 
             page = draft.page
-            if not page:
+            if not page and draft.draft_kind != "create":
                 return "Error: parent wiki page not found."
 
             if not await _can_review_page(session, employee, page):
@@ -1395,7 +1415,9 @@ def register_tools(mcp: FastMCP):
                 return "Error: you cannot approve your own draft. Ask another editor to review it."
 
             try:
-                await wiki_service.approve_draft(
+                # For draft_kind='create' the page is materialised here, so
+                # always take the page from the return value.
+                page = await wiki_service.approve_draft(
                     session, draft, employee.id,
                     reviewer_note=reviewer_note,
                     edited_content_md=edited_content_md,
@@ -1406,6 +1428,10 @@ def register_tools(mcp: FastMCP):
                     f"Conflict: {e}. Re-call with allow_conflict=true to overwrite "
                     "or supply edited_content_md after merging the latest changes."
                 )
+            except wiki_service.CreateDraftSlugConflict as e:
+                return f"Error: {e}"
+            except ValueError as e:
+                return f"Error: {e}"
             approved_scope_type = page.scope_type or "global"
             approved_scope_id = page.scope_id
             await wiki_service.regenerate_index(
@@ -1476,7 +1502,7 @@ def register_tools(mcp: FastMCP):
                 return "Error: employee not found."
 
             page = draft.page
-            if not page:
+            if not page and draft.draft_kind != "create":
                 return "Error: parent wiki page not found."
 
             if not await _can_review_page(session, employee, page):
@@ -1550,7 +1576,7 @@ def register_tools(mcp: FastMCP):
                 return "Error: employee not found."
 
             page = draft.page
-            if not page:
+            if not page and draft.draft_kind != "create":
                 return "Error: parent wiki page not found."
             if not await _can_review_page(session, employee, page):
                 return "Error: insufficient permission to review drafts for this page."
