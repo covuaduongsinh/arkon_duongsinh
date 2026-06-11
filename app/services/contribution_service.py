@@ -167,7 +167,7 @@ class WikiDraftAdapter:
     async def reviewers(self, db: AsyncSession, obj: WikiPageDraft) -> list[uuid.UUID]:
         page: Optional[WikiPage] = obj.page
         if page is None:
-            return await notification_service.get_global_reviewers(db)
+            return await notification_service.get_reviewers_for_scope(db, "global", None)
         return await notification_service.get_reviewers_for_scope(
             db, page.scope_type or "global", page.scope_id,
         )
@@ -211,7 +211,7 @@ class SkillContributionAdapter:
 
     async def reviewers(self, db: AsyncSession, obj: SkillContribution) -> list[uuid.UUID]:
         # Skill reviewers = admins for now (skill approval is admin-only path).
-        return await notification_service.get_global_reviewers(db)
+        return await notification_service.get_reviewers_for_scope(db, "global", None)
 
 
 # Singleton instances — adapters are stateless.
