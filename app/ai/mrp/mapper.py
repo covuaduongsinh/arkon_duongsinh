@@ -29,9 +29,33 @@ from app.utils.progress import ProgressTracker
 
 CHUNK_TARGET_CHARS = 20_000
 OVERLAP_CHARS = 1_000
-MAX_MAP_CONCURRENCY = 6
+MAX_MAP_CONCURRENCY = 3  # giảm từ 6 để hạn chế burst request gây 429
 EXTRACT_TIMEOUT = 120  # seconds per extraction call
 OVERLAP_SEPARATOR = "[…context from previous section…]\n"
+
+# Rate-limit retry
+_RL_MAX_RETRIES = 5
+_RL_BACKOFF_SCHEDULE = (5, 10, 20, 40, 60)  # seconds; len == _RL_MAX_RETRIES
+
+
+# ---------------------------------------------------------------------------
+# Retry helpers
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT_CLASS_NAMES = frozenset({
+    "RateLimitError",    # anthropic, openai
+    "ResourceExhausted", # google.api_core.exceptions
+})
+
+_RATE_LIMIT_MESSAGE_FRAGMENTS = ("rate limit", "429", "resource_exhaust", "quota")
+
+
+def _is_rate_limit_error(e: Exception) -> bool:
+    """Detect 429 / rate-limit errors from any provider without importing provider modules."""
+    if type(e).__name__ in _RATE_LIMIT_CLASS_NAMES:
+        return True
+    msg = str(e).lower()
+    return any(frag in msg for frag in _RATE_LIMIT_MESSAGE_FRAGMENTS)
 
 
 # ---------------------------------------------------------------------------
@@ -406,39 +430,87 @@ async def run_map_phase(
     async def _extract_with_sem(chunk: DocumentChunk):
         async with semaphore:
             row = existing_by_idx[chunk.index]
-            try:
-                extract = await extract_chunk(llm, chunk)
-                # Serialize mutations and commits — AsyncSession can't handle concurrent state changes
-                async with commit_lock:
-                    row.extract_json = extract
-                    row.status = "done"
-                    row.error_message = None
-                    await session.commit()
-            except Exception as e:
-                logger.warning(f"MRP MAP chunk {chunk.index} failed: {e}")
+            last_exc: Exception | None = None
+            for attempt in range(_RL_MAX_RETRIES + 1):
+                try:
+                    extract = await extract_chunk(llm, chunk)
+                    # Serialize mutations and commits — AsyncSession can't handle concurrent state changes
+                    async with commit_lock:
+                        row.extract_json = extract
+                        row.status = "done"
+                        row.error_message = None
+                        await session.commit()
+                    last_exc = None
+                    break
+                except Exception as e:
+                    if _is_rate_limit_error(e) and attempt < _RL_MAX_RETRIES:
+                        delay = _RL_BACKOFF_SCHEDULE[attempt]
+                        logger.warning(
+                            f"MRP MAP chunk {chunk.index} rate-limited "
+                            f"(attempt {attempt + 1}/{_RL_MAX_RETRIES + 1}), "
+                            f"retrying in {delay}s: {e}"
+                        )
+                        await asyncio.sleep(delay)
+                        last_exc = e
+                    else:
+                        logger.warning(f"MRP MAP chunk {chunk.index} failed: {e}")
+                        async with commit_lock:
+                            row.status = "error"
+                            row.error_message = str(e)[:500]
+                            await session.commit()
+                        last_exc = None
+                        break
+            else:
+                # for...else: tất cả retries đã hết cho rate-limit error
+                logger.warning(
+                    f"MRP MAP chunk {chunk.index} exhausted {_RL_MAX_RETRIES} "
+                    f"rate-limit retries: {last_exc}"
+                )
                 async with commit_lock:
                     row.status = "error"
-                    row.error_message = str(e)[:500]
+                    row.error_message = str(last_exc)[:500]
                     await session.commit()
             pct = 10 + int(40 * (done_count + chunk.index + 1) / max(len(chunks), 1))
             await tracker.update(pct, f"Extracting chunk {chunk.index + 1}/{len(chunks)}...")
 
     await asyncio.gather(*[_extract_with_sem(c) for c in pending_chunks])
 
-    # Sequential retry for failed chunks
+    # Sequential retry cho failed chunks (với rate-limit backoff)
     error_chunks = [c for c in chunks if existing_by_idx[c.index].status == "error"]
     if error_chunks:
         logger.info(f"MRP MAP: retrying {len(error_chunks)} failed chunks for source={source_id}")
         for chunk in error_chunks:
             row = existing_by_idx[chunk.index]
-            try:
-                extract = await extract_chunk(llm, chunk)
-                row.extract_json = extract
-                row.status = "done"
-                row.error_message = None
-                await session.commit()
-            except Exception as e:
-                logger.warning(f"MRP MAP chunk {chunk.index} retry failed: {e}")
+            last_exc: Exception | None = None
+            for attempt in range(_RL_MAX_RETRIES + 1):
+                try:
+                    extract = await extract_chunk(llm, chunk)
+                    row.extract_json = extract
+                    row.status = "done"
+                    row.error_message = None
+                    await session.commit()
+                    last_exc = None
+                    break
+                except Exception as e:
+                    if _is_rate_limit_error(e) and attempt < _RL_MAX_RETRIES:
+                        delay = _RL_BACKOFF_SCHEDULE[attempt]
+                        logger.warning(
+                            f"MRP MAP chunk {chunk.index} sequential retry rate-limited "
+                            f"(attempt {attempt + 1}/{_RL_MAX_RETRIES + 1}), "
+                            f"retrying in {delay}s: {e}"
+                        )
+                        await asyncio.sleep(delay)
+                        last_exc = e
+                    else:
+                        logger.warning(f"MRP MAP chunk {chunk.index} retry failed: {e}")
+                        last_exc = None
+                        break
+            else:
+                logger.warning(
+                    f"MRP MAP chunk {chunk.index} sequential retry exhausted "
+                    f"{_RL_MAX_RETRIES} rate-limit retries: {last_exc}"
+                )
+                # row vẫn là status="error" từ parallel phase — không cần ghi lại
 
     # Return all done rows
     done_rows = [existing_by_idx[c.index] for c in chunks if existing_by_idx[c.index].status == "done"]
