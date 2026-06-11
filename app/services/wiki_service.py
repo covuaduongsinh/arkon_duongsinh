@@ -531,8 +531,15 @@ async def apply_create(
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
     status: str = "seed",
+    create_revision: bool = True,
 ) -> WikiPage:
-    """Insert a new page in the given scope. Conflicts raise — caller should use update."""
+    """Insert a new page in the given scope. Conflicts raise — caller should use update.
+
+    When ``create_revision`` is False, the initial WikiPageRevision is not
+    written here — the caller is responsible for recording the v1 revision
+    (e.g. approve_draft tags it with reviewer context). This avoids inserting
+    two revisions at (page_id, version=1), which violates uq_wiki_revisions_page_version.
+    """
     page = WikiPage(
         slug=slug,
         title=title,
@@ -550,10 +557,11 @@ async def apply_create(
     session.add(page)
     await session.flush()
     await refresh_links(session, page.id, slug, content_md)
-    session.add(WikiPageRevision(
-        page_id=page.id, version=page.version,
-        content_md=content_md, change_type="agent_compile",
-    ))
+    if create_revision:
+        session.add(WikiPageRevision(
+            page_id=page.id, version=page.version,
+            content_md=content_md, change_type="agent_compile",
+        ))
     return page
 
 
@@ -1010,6 +1018,10 @@ async def approve_draft(
             content_md=final_content, summary="",
             knowledge_type_slugs=list(kt_slugs), source_ids=[],
             scope_type=scope_type, scope_id=scope_id,
+            # apply_create's auto-revision and this tagged revision would both
+            # land at version=1, colliding on uq_wiki_revisions_page_version.
+            # Suppress the generic one and record a single reviewer-tagged v1.
+            create_revision=False,
         )
         # Tag the create-approval revision with reviewer context.
         session.add(WikiPageRevision(
