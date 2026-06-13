@@ -328,8 +328,18 @@ function LoadingTransition({ message = "Loading data and resolving workspace sco
 function OverviewTab({ data }: { data: OverviewResponse | null }) {
   if (!data) return <SkeletonGrid />;
   const k = data.kpis;
+  const allEmpty = Object.values(k).every((v) => v === null || v === undefined);
   return (
     <div className="space-y-6">
+      {allEmpty && (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-500/20 bg-amber-50/40 px-4 py-3 text-sm text-amber-900">
+          <span className="material-symbols-outlined text-base text-amber-600">info</span>
+          <span>
+            No statistics have been computed yet — they are generated daily. Click{" "}
+            <span className="font-medium">Rollup</span> above to compute them now.
+          </span>
+        </div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KpiCard label="Total wiki pages" value={fmtNumber(k["wiki.pages.total"])} icon="auto_stories" />
         <KpiCard

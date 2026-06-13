@@ -57,6 +57,8 @@ export function WikiPageTree({
   activeScope,
   getCreateModeForScope,
   onCreatePage,
+  collapsed,
+  onCollapsedChange,
 }: {
   activeSlug?: string;
   onDeleted?: () => void;
@@ -75,12 +77,21 @@ export function WikiPageTree({
   getCreateModeForScope?: (scope: { scope_type: string; scope_id: string | null }) => "direct" | "propose" | null;
   /** Called when the user clicks the per-scope `+` button. */
   onCreatePage?: (scope: { scope_type: string; scope_id: string | null }) => void;
+  /** Controlled collapse state. When omitted, the component owns it internally. */
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
 }) {
   const pathname = usePathname();
   const [pages, setPages] = React.useState<WikiPageSummary[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [search, setSearch] = React.useState("");
-  const [collapsed, setCollapsed] = React.useState(false);
+  const [internalCollapsed, setInternalCollapsed] = React.useState(false);
+  const isCollapsedControlled = collapsed !== undefined;
+  const collapsedState = isCollapsedControlled ? collapsed : internalCollapsed;
+  const setCollapsed = (v: boolean) => {
+    if (!isCollapsedControlled) setInternalCollapsed(v);
+    onCollapsedChange?.(v);
+  };
   const [expandedGroups, setExpandedGroups] = React.useState<Set<string>>(
     new Set(GROUP_ORDER)
   );
@@ -361,9 +372,9 @@ export function WikiPageTree({
     );
   };
 
-  if (collapsed) {
+  if (collapsedState) {
     return (
-      <div className="w-10 border-r border-border bg-card/30 flex flex-col items-center pt-4 gap-3 shrink-0">
+      <div className="h-full w-full border-r border-border bg-card/30 flex flex-col items-center pt-4 gap-3">
         <button
           onClick={() => setCollapsed(false)}
           className="text-muted-foreground hover:text-foreground transition-colors"
@@ -376,7 +387,7 @@ export function WikiPageTree({
   }
 
   return (
-    <div className="w-64 shrink-0 border-r border-border bg-card/30 flex flex-col overflow-hidden">
+    <div className="h-full w-full border-r border-border bg-card/30 flex flex-col overflow-hidden">
       {/* === PAGES SECTION === */}
       <div className="flex flex-col min-h-0" style={{ flex: sourcesCollapsed ? '1 1 auto' : '1 1 55%' }}>
       {/* Header */}

@@ -16,6 +16,7 @@ import { WikiScopeSwitcher } from "@/components/wiki/wiki-scope-switcher";
 import { WikiCreatePageDialog } from "@/components/wiki/wiki-create-page-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
 import { useAuth } from "@/lib/auth";
+import { PanelGroup, Panel, PanelResizeHandle, ImperativePanelHandle } from "react-resizable-panels";
 
 const WORKSPACE_ROLE_LEVEL: Record<string, number> = {
   viewer: 0,
@@ -36,6 +37,10 @@ export default function WikiIndexPage() {
   const urlScopeId = searchParams.get("scope_id");
 
   const { user, getWorkspaceRole, hasPermission } = useAuth();
+
+  // Resizable page-tree panel (size + collapse persisted via PanelGroup autoSaveId).
+  const leftPanelRef = React.useRef<ImperativePanelHandle>(null);
+  const [leftCollapsed, setLeftCollapsed] = React.useState(false);
 
   const [indexMd, setIndexMd] = React.useState<string | null>(null);
   const [allPages, setAllPages] = React.useState<WikiPageSummary[]>([]);
@@ -228,8 +233,22 @@ export default function WikiIndexPage() {
         }
       />
 
-      <div className="flex-1 flex gap-0 -mx-6 md:-mx-8 lg:-mx-10 -mb-6 md:-mb-8 lg:-mb-10 min-h-0 border-t border-border">
+      <div className="flex-1 flex -mx-6 md:-mx-8 lg:-mx-10 -mb-6 md:-mb-8 lg:-mb-10 min-h-0 border-t border-border overflow-hidden">
+        <PanelGroup direction="horizontal" autoSaveId="wiki-index-panels" className="flex-1">
         {/* Page Tree */}
+        <Panel
+          id="left"
+          ref={leftPanelRef}
+          order={1}
+          collapsible
+          collapsedSize={3}
+          minSize={14}
+          maxSize={30}
+          defaultSize={20}
+          onCollapse={() => setLeftCollapsed(true)}
+          onExpand={() => setLeftCollapsed(false)}
+          className="min-w-0"
+        >
         <WikiPageTree
           groupByScope
           activeScope={{
@@ -257,10 +276,20 @@ export default function WikiIndexPage() {
             );
             setCreateOpen(true);
           }}
+          collapsed={leftCollapsed}
+          onCollapsedChange={(c) =>
+            c ? leftPanelRef.current?.collapse() : leftPanelRef.current?.expand()
+          }
         />
+        </Panel>
+
+        <PanelResizeHandle className="group relative flex w-2 shrink-0 items-stretch justify-center bg-transparent outline-none cursor-col-resize">
+          <div className="w-px bg-border transition-colors group-hover:bg-primary/60 group-data-[resize-handle-state=drag]:bg-primary" />
+        </PanelResizeHandle>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+        <Panel id="center" order={2} minSize={40} className="min-w-0">
+        <div className="h-full overflow-y-auto px-8 py-6">
           {loading ? (
             <div className="flex items-center justify-center h-32">
               <span className="material-symbols-outlined text-3xl text-muted-foreground animate-spin">
@@ -380,6 +409,8 @@ export default function WikiIndexPage() {
             />
           )}
         </div>
+        </Panel>
+        </PanelGroup>
       </div>
 
       <WikiSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />

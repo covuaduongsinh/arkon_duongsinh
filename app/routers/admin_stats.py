@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,9 +25,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.database.models import Employee, StatsDailyRollup
 from app.services.auth_service import require_permission
-from app.services.stats_aggregator import run_daily_rollup
+from app.services.stats_aggregator import ensure_rollups_fresh, run_daily_rollup
 
 router = APIRouter(prefix="/admin/stats")
+
+
+async def _ensure_fresh_safe() -> None:
+    """Best-effort self-heal so the dashboard never renders blank on a fresh deploy
+    or after worker downtime. A rollup failure must never break the read path."""
+    try:
+        await ensure_rollups_fresh()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"stats: ensure_rollups_fresh skipped due to error: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +162,7 @@ async def get_overview(
     _user: Employee = require_permission("org:settings:manage"),
 ):
     """Latest snapshot of headline KPIs + top gap topic + top contributor (last 30 days)."""
+    await _ensure_fresh_safe()
     today = datetime.now(timezone.utc).date()
     from_date = today - timedelta(days=30)
     to_date = today
@@ -233,6 +244,7 @@ async def get_content(
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:settings:manage"),
 ):
+    await _ensure_fresh_safe()
     f, t = _parse_range(from_date, to_date)
     rows = await _fetch_rows(db, CONTENT_SCALAR + CONTENT_LIST, f, t)
     return _to_section_response(rows, f, t, CONTENT_SCALAR, CONTENT_LIST)
@@ -245,6 +257,7 @@ async def get_contribution(
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:settings:manage"),
 ):
+    await _ensure_fresh_safe()
     f, t = _parse_range(from_date, to_date)
     rows = await _fetch_rows(db, CONTRIBUTION_SCALAR + CONTRIBUTION_LIST, f, t)
     return _to_section_response(rows, f, t, CONTRIBUTION_SCALAR, CONTRIBUTION_LIST)
@@ -257,6 +270,7 @@ async def get_usage(
     db: AsyncSession = Depends(get_db),
     _user: Employee = require_permission("org:settings:manage"),
 ):
+    await _ensure_fresh_safe()
     f, t = _parse_range(from_date, to_date)
     rows = await _fetch_rows(db, USAGE_SCALAR + USAGE_LIST, f, t)
     return _to_section_response(rows, f, t, USAGE_SCALAR, USAGE_LIST)
@@ -271,6 +285,7 @@ async def get_gaps(
     _user: Employee = require_permission("org:settings:manage"),
 ):
     """Top zero-result MCP queries grouped by normalized text, aggregated over the window."""
+    await _ensure_fresh_safe()
     f, t = _parse_range(from_date, to_date)
     rows = await _fetch_rows(db, GAP_LIST, f, t)
 
@@ -357,9 +372,10 @@ async def export_section(
 @router.post("/rollup", response_model=RollupTriggerResponse)
 async def trigger_rollup(
     target: Optional[str] = Query(None, description="ISO date to rollup; default = yesterday UTC"),
+    days: int = Query(1, ge=1, le=60, description="Recompute this many trailing days ending at target"),
     _user: Employee = require_permission("org:settings:manage"),
 ):
-    """Run (or re-run) the daily rollup for one date. Idempotent."""
+    """Run (or re-run) the daily rollup for `days` dates ending at `target`. Idempotent."""
     if target:
         try:
             target_date = date.fromisoformat(target)
@@ -367,5 +383,12 @@ async def trigger_rollup(
             raise HTTPException(status_code=400, detail="target must be ISO date YYYY-MM-DD")
     else:
         target_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-    result = await run_daily_rollup(target_date)
-    return RollupTriggerResponse(target_date=target_date, sections_written=result)
+
+    # Compute the trailing window [target-days+1 .. target], oldest first.
+    total: dict[str, int] = {}
+    for i in range(days - 1, -1, -1):
+        d = target_date - timedelta(days=i)
+        result = await run_daily_rollup(d)
+        for section, count in result.items():
+            total[section] = total.get(section, 0) + count
+    return RollupTriggerResponse(target_date=target_date, sections_written=total)

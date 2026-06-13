@@ -27,6 +27,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
+import { PanelGroup, Panel, PanelResizeHandle, ImperativePanelHandle } from "react-resizable-panels";
 
 const WORKSPACE_ROLE_LEVEL: Record<string, number> = {
   viewer: 0,
@@ -53,6 +54,25 @@ export default function WikiPageViewer() {
   const scopeId = searchParams.get("scopeId") || undefined;
   const isScoped = !!scopeType && scopeType !== "global";
   const isProjectScoped = false;
+
+  // Resizable side panels (sizes + collapse persisted via PanelGroup autoSaveId).
+  // `*Collapsed` mirror the panels' real state via onCollapse/onExpand so the
+  // child swaps to its icon strip exactly when the panel is collapsed.
+  const leftPanelRef = React.useRef<ImperativePanelHandle>(null);
+  const rightPanelRef = React.useRef<ImperativePanelHandle>(null);
+  const [leftCollapsed, setLeftCollapsed] = React.useState(false);
+  const [rightCollapsed, setRightCollapsed] = React.useState(false);
+  // On narrow screens, default the Page Info panel collapsed (instead of the
+  // old hard hide) once it first mounts. Runs once per load; the user can drag
+  // it open, and autoSaveId restores explicit sizes on wider screens.
+  const didInitRightRef = React.useRef(false);
+  React.useEffect(() => {
+    if (didInitRightRef.current || !rightPanelRef.current) return;
+    didInitRightRef.current = true;
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      rightPanelRef.current.collapse();
+    }
+  });
 
   // Where "back" navigates. Projects keep their dedicated workspace page;
   // department-scoped pages return to the wiki landing with the scope preserved
@@ -471,10 +491,24 @@ export default function WikiPageViewer() {
         }
       />
 
-      <div className="flex-1 flex gap-0 -mx-6 md:-mx-8 lg:-mx-10 -mb-6 md:-mb-8 lg:-mb-10 min-h-0 border-t border-border overflow-hidden">
+      <div className="flex-1 flex -mx-6 md:-mx-8 lg:-mx-10 -mb-6 md:-mb-8 lg:-mb-10 min-h-0 border-t border-border overflow-hidden">
+        <PanelGroup direction="horizontal" autoSaveId="wiki-viewer-panels" className="flex-1">
         {/* Left: Page Tree — same scope-grouped layout as /wiki. We do NOT
             filter pagesUrl by scope so the sidebar is identical across all
             wiki pages; the active page's scope bucket auto-expands. */}
+        <Panel
+          id="left"
+          ref={leftPanelRef}
+          order={1}
+          collapsible
+          collapsedSize={3}
+          minSize={14}
+          maxSize={28}
+          defaultSize={18}
+          onCollapse={() => setLeftCollapsed(true)}
+          onExpand={() => setLeftCollapsed(false)}
+          className="min-w-0"
+        >
         <WikiPageTree
           activeSlug={fullSlug}
           groupByScope
@@ -498,10 +532,20 @@ export default function WikiPageViewer() {
             );
             setCreateOpen(true);
           }}
+          collapsed={leftCollapsed}
+          onCollapsedChange={(c) =>
+            c ? leftPanelRef.current?.collapse() : leftPanelRef.current?.expand()
+          }
         />
+        </Panel>
+
+        <PanelResizeHandle className="group relative flex w-2 shrink-0 items-stretch justify-center bg-transparent outline-none cursor-col-resize">
+          <div className="w-px bg-border transition-colors group-hover:bg-primary/60 group-data-[resize-handle-state=drag]:bg-primary" />
+        </PanelResizeHandle>
 
         {/* Center: Content */}
-        <div className="flex-1 overflow-y-auto min-w-0">
+        <Panel id="center" order={2} minSize={30} className="min-w-0">
+        <div className="h-full overflow-y-auto min-w-0">
           {loading ? (
             <div className="px-4 py-8">
               <div className="flex items-center gap-2 mb-4">
@@ -858,13 +902,41 @@ export default function WikiPageViewer() {
             </div>
           ) : null}
         </div>
+        </Panel>
 
-        {/* Right: Sidebar (hidden on < lg, only in view mode) */}
+        {/* Right: Page Info — collapsible; defaults collapsed on small screens
+            (< lg) instead of disappearing. Only in view mode. */}
         {page && mode === "view" && (
-          <div className="hidden lg:block h-full">
-            <WikiSidebarRight slug={fullSlug} page={page} linkSuffix={scopeLinkSuffix} />
-          </div>
+          <>
+            <PanelResizeHandle className="group relative flex w-2 shrink-0 items-stretch justify-center bg-transparent outline-none cursor-col-resize">
+          <div className="w-px bg-border transition-colors group-hover:bg-primary/60 group-data-[resize-handle-state=drag]:bg-primary" />
+        </PanelResizeHandle>
+            <Panel
+              id="right"
+              ref={rightPanelRef}
+              order={3}
+              collapsible
+              collapsedSize={3}
+              minSize={16}
+              maxSize={32}
+              defaultSize={20}
+              onCollapse={() => setRightCollapsed(true)}
+              onExpand={() => setRightCollapsed(false)}
+              className="min-w-0"
+            >
+              <WikiSidebarRight
+                slug={fullSlug}
+                page={page}
+                linkSuffix={scopeLinkSuffix}
+                collapsed={rightCollapsed}
+                onCollapsedChange={(c) =>
+                  c ? rightPanelRef.current?.collapse() : rightPanelRef.current?.expand()
+                }
+              />
+            </Panel>
+          </>
         )}
+        </PanelGroup>
       </div>
 
       <WikiSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />

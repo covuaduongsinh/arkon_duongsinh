@@ -15,6 +15,7 @@ Metric categories (see also docs in `app/routers/admin_stats.py`):
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -552,3 +553,84 @@ async def run_daily_rollup(target_date: date) -> dict[str, int]:
         await session.commit()
     logger.info(f"stats: rollup complete for {target_date}: {written}")
     return written
+
+
+# ---------------------------------------------------------------------------
+# Self-healing freshness — keep the rollup table current on dashboard load
+# ---------------------------------------------------------------------------
+
+# How many trailing days to (re)compute when the table is empty or stale. Keeps
+# a fresh deploy / post-downtime first load bounded instead of recomputing all
+# of history.
+BACKFILL_DAYS = 14
+
+# Guard so the parallel burst of dashboard endpoint calls on mount only triggers
+# the catch-up once per process per UTC day. The hot path (already fresh) skips
+# the DB entirely.
+_ensure_lock = asyncio.Lock()
+_last_ensured: Optional[date] = None
+
+
+def _missing_rollup_dates(
+    latest: Optional[date], today: date, backfill_days: int
+) -> list[date]:
+    """Which UTC dates need a rollup, given the latest date already present.
+
+    Pure (no I/O) so it can be unit-tested without a DB.
+        - empty table (latest is None) -> trailing window [today-backfill_days+1 .. today]
+        - latest >= today              -> [] (already fresh)
+        - otherwise                    -> [latest+1 .. today], capped to the
+                                          trailing backfill_days window
+    """
+    if latest is not None and latest >= today:
+        return []
+    earliest = today - timedelta(days=backfill_days - 1)
+    start = (latest + timedelta(days=1)) if latest is not None else earliest
+    if start < earliest:
+        start = earliest
+    span = (today - start).days
+    return [start + timedelta(days=i) for i in range(span + 1)]
+
+
+async def _latest_rollup_date(session: AsyncSession) -> Optional[date]:
+    """Most recent UTC date present in stats_daily_rollup, or None if empty."""
+    res = (await session.execute(select(func.max(StatsDailyRollup.date)))).scalar()
+    if res is None:
+        return None
+    return res.date() if isinstance(res, datetime) else res
+
+
+async def ensure_rollups_fresh(backfill_days: int = BACKFILL_DAYS) -> dict[str, int]:
+    """Best-effort: make the rollup table current up to today (UTC).
+
+    Cheap no-op on the hot path (already computed today). On a fresh DB or after
+    worker downtime, computes the missing recent days so the dashboard is never
+    blank. Idempotent — safe to call concurrently from multiple read endpoints;
+    the in-process guard means only the first caller does the work.
+
+    Returns {iso_date: rows_written} for the days it computed.
+    """
+    global _last_ensured
+    today = datetime.now(timezone.utc).date()
+    if _last_ensured == today:
+        return {}
+    async with _ensure_lock:
+        if _last_ensured == today:
+            return {}
+        async with async_session_factory() as session:
+            latest = await _latest_rollup_date(session)
+        missing = _missing_rollup_dates(latest, today, backfill_days)
+        written: dict[str, int] = {}
+        all_ok = True
+        for d in missing:
+            try:
+                res = await run_daily_rollup(d)
+                written[d.isoformat()] = sum(v for v in res.values() if v and v > 0)
+            except Exception as exc:  # noqa: BLE001
+                all_ok = False
+                logger.exception(f"stats: ensure_rollups_fresh failed for {d}: {exc}")
+        # Only cache success when every attempted day went through, so a transient
+        # failure retries on the next request instead of being suppressed until tomorrow.
+        if all_ok:
+            _last_ensured = today
+        return written

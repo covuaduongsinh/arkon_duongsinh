@@ -14,6 +14,9 @@ type Props = {
   /** Suffix appended to /wiki/<slug> links (e.g. "?scopeType=...&scopeId=...")
    *  so backlinks/outlinks preserve the current scope context. */
   linkSuffix?: string;
+  /** Controlled collapse state. When omitted, the component owns it internally. */
+  collapsed?: boolean;
+  onCollapsedChange?: (collapsed: boolean) => void;
 };
 
 function LinkItem({
@@ -74,8 +77,16 @@ function Section({
   );
 }
 
-export function WikiSidebarRight({ slug, page, linkSuffix = "" }: Props) {
+export function WikiSidebarRight({ slug, page, linkSuffix = "", collapsed, onCollapsedChange }: Props) {
   const [graphData, setGraphData] = React.useState<WikiGraphData | null>(null);
+
+  const [internalCollapsed, setInternalCollapsed] = React.useState(false);
+  const isCollapsedControlled = collapsed !== undefined;
+  const collapsedState = isCollapsedControlled ? collapsed : internalCollapsed;
+  const setCollapsed = (v: boolean) => {
+    if (!isCollapsedControlled) setInternalCollapsed(v);
+    onCollapsedChange?.(v);
+  };
 
   React.useEffect(() => {
     api<WikiGraphData>(`/api/wiki/graph?slug=${encodeURIComponent(slug)}&depth=1`)
@@ -83,8 +94,22 @@ export function WikiSidebarRight({ slug, page, linkSuffix = "" }: Props) {
       .catch(() => setGraphData(null));
   }, [slug]);
 
+  if (collapsedState) {
+    return (
+      <div className="h-full w-full border-l border-border bg-card/30 flex flex-col items-center pt-4 gap-3">
+        <button
+          onClick={() => setCollapsed(false)}
+          className="text-muted-foreground hover:text-foreground transition-colors"
+          title="Expand page info"
+        >
+          <span className="material-symbols-outlined text-base">right_panel_open</span>
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="w-72 shrink-0 border-l border-border bg-card/30 flex flex-col overflow-hidden h-full">
+    <div className="h-full w-full border-l border-border bg-card/30 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         <span className="material-symbols-outlined text-sm text-muted-foreground">
@@ -93,6 +118,13 @@ export function WikiSidebarRight({ slug, page, linkSuffix = "" }: Props) {
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
           Page Info
         </span>
+        <button
+          onClick={() => setCollapsed(true)}
+          className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+          title="Collapse"
+        >
+          <span className="material-symbols-outlined text-base">right_panel_close</span>
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
