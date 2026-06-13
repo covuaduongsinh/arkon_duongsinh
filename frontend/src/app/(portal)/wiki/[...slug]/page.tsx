@@ -14,6 +14,7 @@ import { wikiTypeGroupLabel } from "@/components/wiki/wiki-type-badge";
 import { WikiSearchDialog } from "@/components/wiki/wiki-search-dialog";
 import { WikiScopeSwitcher } from "@/components/wiki/wiki-scope-switcher";
 import { WikiCreatePageDialog } from "@/components/wiki/wiki-create-page-dialog";
+import { WikiMovePageDialog } from "@/components/wiki/wiki-move-page-dialog";
 import { WikiStatusBadge, WikiStatus } from "@/components/wiki/wiki-status-badge";
 import {
   DropdownMenu,
@@ -94,6 +95,7 @@ export default function WikiPageViewer() {
   const [loading, setLoading] = React.useState(true);
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
+  const [moveOpen, setMoveOpen] = React.useState(false);
   const [dialogScope, setDialogScope] = React.useState<WikiScope | null>(null);
   // Author-side: the draft the user is currently resubmitting (needs_revision).
   // When set, the page replaces the read view with a WikiEditor pre-filled
@@ -604,15 +606,29 @@ export default function WikiPageViewer() {
                 </div>
 
                 {mode === "view" && !isSourceView && (canEdit || canPropose) && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setMode("edit")}
-                    className="shrink-0 gap-1.5 mt-1"
-                  >
-                    <span className="material-symbols-outlined text-sm">edit</span>
-                    {canEdit ? "Edit" : "Propose Edit"}
-                  </Button>
+                  <div className="flex items-center gap-2 shrink-0 mt-1">
+                    {canEdit && page && !["_index", "_log", "_hot"].includes(page.slug) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setMoveOpen(true)}
+                        className="gap-1.5 text-muted-foreground"
+                        title="Move page to a different scope"
+                      >
+                        <span className="material-symbols-outlined text-sm">drive_file_move</span>
+                        Move
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMode("edit")}
+                      className="gap-1.5"
+                    >
+                      <span className="material-symbols-outlined text-sm">edit</span>
+                      {canEdit ? "Edit" : "Propose Edit"}
+                    </Button>
+                  </div>
                 )}
               </div>
 
@@ -868,6 +884,20 @@ export default function WikiPageViewer() {
               scope_id: s.scope_id ?? null,
             })
           }
+        />
+      )}
+      {page && canEdit && (
+        <WikiMovePageDialog
+          open={moveOpen}
+          onOpenChange={setMoveOpen}
+          page={page}
+          scopes={scopes}
+          onMoved={() => {
+            const scopeParams = isScoped ? `?scope_type=${scopeType}&scope_id=${scopeId}` : "";
+            api<WikiPageDetail>(`/api/wiki/pages/${encodeURIComponent(fullSlug)}${scopeParams}`)
+              .then(setPage)
+              .catch(() => {});
+          }}
         />
       )}
       {showCreateBranch && (
