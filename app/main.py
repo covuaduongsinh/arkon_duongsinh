@@ -81,6 +81,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Could not seed built-in skills: {e}")
 
+        # Seed demo chess content (idempotent — only when chess tables are empty)
+        try:
+            from app.scripts.seed_chess_demo import seed_chess_demo
+            await seed_chess_demo()
+        except Exception as e:
+            logger.warning(f"Could not seed chess demo content: {e}")
+
         # Warn if sensitive defaults are unchanged
         if settings.secret_key == "change-me-to-a-random-secret-string":
             logger.warning("⚠️  SECRET_KEY is set to the default value — change it before deploying to production!")
@@ -185,6 +192,14 @@ from app.routers import (  # noqa: E402
     admin_stats,
     audit,
     auth,
+    chess_analysis,
+    chess_games,
+    chess_lms,
+    chess_matches,
+    chess_positions,
+    chess_puzzles,
+    chess_study,
+    chess_ws,
     knowledge_types,
     notes,
     notifications,
@@ -221,6 +236,14 @@ app.include_router(audit.router, prefix="/api", tags=["audit"])
 app.include_router(skills.router, prefix="/api", tags=["skills"])
 app.include_router(skill_contributions.router, prefix="/api", tags=["skill-contributions"])
 app.include_router(notifications.router, prefix="/api", tags=["notifications"])
+app.include_router(chess_games.router, prefix="/api", tags=["chess"])
+app.include_router(chess_puzzles.router, prefix="/api", tags=["chess"])
+app.include_router(chess_positions.router, prefix="/api", tags=["chess"])
+app.include_router(chess_analysis.router, prefix="/api", tags=["chess"])
+app.include_router(chess_study.router, prefix="/api", tags=["chess"])
+app.include_router(chess_matches.router, prefix="/api", tags=["chess"])
+app.include_router(chess_lms.router, prefix="/api", tags=["chess-lms"])
+app.include_router(chess_ws.router, prefix="/api")
 
 
 @app.get("/")

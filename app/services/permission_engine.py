@@ -210,6 +210,67 @@ def build_skill_filter(user: Employee, action: str = "read"):
     return True, None
 
 
+# ---------------------------------------------------------------------------
+# Global Realm: Chess access
+# ---------------------------------------------------------------------------
+# Chess entities (games, puzzles, positions, study sets, matches) carry
+# scope_type/scope_id directly (like WikiPage) rather than an M2M department
+# table. A "global" row is visible to everyone with chess:{action}; a
+# "department" row is visible to members of scope_id (+ :all holders / admins).
+
+def can_access_chess(user: Employee, obj, action: str = "read") -> bool:
+    """Check if user can perform action on a chess entity.
+
+    `obj` is any chess model exposing `.scope_type` and `.scope_id`.
+
+    Logic:
+    1. Admin → True
+    2. User has chess:{action}:all → True
+    3. User has chess:{action}:own_dept →
+       a. obj is global (scope_type != 'department') → True
+       b. obj.scope_id is in user.department_ids → True
+       c. Otherwise → False
+    4. Otherwise → False
+    """
+    if user.role == "admin":
+        return True
+
+    permissions = _get_user_permissions(user)
+
+    if f"chess:{action}:all" in permissions:
+        return True
+
+    if f"chess:{action}:own_dept" not in permissions:
+        return False
+
+    if getattr(obj, "scope_type", "global") != "department":
+        return True
+
+    return obj.scope_id in set(user.department_ids)
+
+
+def build_chess_filter(user: Employee, action: str = "read"):
+    """Build scope filter inputs for listing chess entities.
+
+    Returns: (needs_filter: bool, allowed_dept_ids: list[UUID] | None)
+    - needs_filter=False → no restriction (admin or :all scope)
+    - allowed_dept_ids=[]  → only global rows (own_dept but zero departments)
+    - allowed_dept_ids=None → no permission at all, empty result
+
+    Callers build the clause: scope_type='global' OR scope_id IN allowed_dept_ids.
+    """
+    if user.role == "admin":
+        return False, []
+
+    permissions = _get_user_permissions(user)
+
+    if f"chess:{action}:all" in permissions:
+        return False, []
+
+    if f"chess:{action}:own_dept" in permissions:
+        return True, list(user.department_ids)
+
+    return True, None
 
 
 

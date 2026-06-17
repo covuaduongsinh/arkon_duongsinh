@@ -35,6 +35,14 @@ ALL_PERMISSIONS: list[str] = [
     "skill:delete:own_dept", "skill:delete:all",
     "skill:contribution:review",
 
+    # Chess
+    "chess:read:own_dept", "chess:read:all",
+    "chess:create:own_dept", "chess:create:all",
+    "chess:edit:own_dept", "chess:edit:all",
+    "chess:delete:own_dept", "chess:delete:all",
+    "chess:play",
+    "chess:coach",
+
     # Organization
     "org:departments:read", "org:departments:manage",
     "org:employees:read", "org:employees:manage",
@@ -70,13 +78,22 @@ ROLE_PERMISSIONS_MAP: dict[str, list[str]] = {
         "doc:read:own_dept",
         "wiki:read:own_dept",
         "skill:read:own_dept",
+        "chess:read:own_dept",
         "org:departments:read",
         "org:employees:read",
+    ],
+    # Students get read access to chess content plus the ability to solve
+    # puzzles / play sparring within their cohort department. No org access.
+    "student": [
+        "wiki:read:own_dept",
+        "chess:read:own_dept",
+        "chess:play",
     ],
     "contributor": [
         "doc:read:own_dept", "doc:create:own_dept",
         "wiki:read:own_dept", "wiki:write:own_dept",
         "skill:read:own_dept", "skill:create:own_dept",
+        "chess:read:own_dept", "chess:create:own_dept", "chess:play",
         "org:departments:read", "org:employees:read",
     ],
     "knowledge_manager": [
@@ -84,6 +101,8 @@ ROLE_PERMISSIONS_MAP: dict[str, list[str]] = {
         "wiki:read:all", "wiki:write:all", "wiki:delete:all",
         "skill:read:all", "skill:create:all", "skill:edit:all", "skill:delete:all",
         "skill:contribution:review",
+        "chess:read:all", "chess:create:all", "chess:edit:all", "chess:delete:all",
+        "chess:play", "chess:coach",
         "org:departments:read", "org:departments:manage",
         "org:employees:read", "org:employees:manage",
         "org:audit:read",
@@ -113,6 +132,14 @@ PERMISSION_GROUPS: dict[str, list[str]] = {
         "skill:edit:own_dept", "skill:edit:all",
         "skill:delete:own_dept", "skill:delete:all",
         "skill:contribution:review",
+    ],
+    "Chess": [
+        "chess:read:own_dept", "chess:read:all",
+        "chess:create:own_dept", "chess:create:all",
+        "chess:edit:own_dept", "chess:edit:all",
+        "chess:delete:own_dept", "chess:delete:all",
+        "chess:play",
+        "chess:coach",
     ],
     "Organization": [
         "org:departments:read", "org:departments:manage",
@@ -157,6 +184,18 @@ PERMISSION_LABELS: dict[str, str] = {
     "skill:delete:own_dept":  "Delete AI skills (own department)",
     "skill:delete:all":       "Delete all AI skills",
     "skill:contribution:review": "Review AI skill contributions",
+
+    # Chess
+    "chess:read:own_dept":    "View chess content (own department + global)",
+    "chess:read:all":         "View all chess content",
+    "chess:create:own_dept":  "Add chess games/puzzles (own department)",
+    "chess:create:all":       "Add chess games/puzzles (any department)",
+    "chess:edit:own_dept":    "Edit chess content (own department)",
+    "chess:edit:all":         "Edit all chess content",
+    "chess:delete:own_dept":  "Delete chess content (own department)",
+    "chess:delete:all":       "Delete all chess content",
+    "chess:play":             "Solve puzzles & play sparring matches",
+    "chess:coach":            "Manage study sets & publish puzzles",
 
     # Organization
     "org:departments:read":   "View departments",
@@ -205,6 +244,18 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     "skill:delete:own_dept":  "Delete AI skills belonging to your department.",
     "skill:delete:all":       "Delete any AI skill. Dangerous.",
     "skill:contribution:review": "Approve or reject proposed AI skill contributions.",
+
+    # Chess
+    "chess:read:own_dept":    "View chess games, puzzles and positions scoped to your department and Global ones.",
+    "chess:read:all":         "View all chess content across every department.",
+    "chess:create:own_dept":  "Import games and create puzzles/positions for your department.",
+    "chess:create:all":       "Import games and create puzzles/positions for any department.",
+    "chess:edit:own_dept":    "Edit chess content belonging to your department.",
+    "chess:edit:all":         "Edit any chess content in the system.",
+    "chess:delete:own_dept":  "Delete chess content belonging to your department.",
+    "chess:delete:all":       "Delete any chess content. Dangerous.",
+    "chess:play":             "Solve puzzles and play sparring matches (students & coaches).",
+    "chess:coach":            "Curate study sets and publish puzzles to students.",
 
     # Organization
     "org:departments:read":   "View the list of departments and their details. Required for most admin views.",

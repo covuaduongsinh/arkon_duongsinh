@@ -1305,6 +1305,38 @@ async def ai_pre_review_draft_task(
     await run_async_checks(draft_id, expected_round=expected_round)
 
 
+async def analyze_game_task(ctx: dict, game_id: str):
+    """Async whole-game engine analysis: eval every position + classify moves."""
+    from app.database import async_session_factory
+    from app.database.models import ChessGame
+    from app.services import chess_engine_service, chess_service
+
+    async with async_session_factory() as session:
+        game = (await session.execute(
+            select(ChessGame).where(ChessGame.id == uuid.UUID(game_id))
+        )).scalar_one_or_none()
+        if not game:
+            return
+        game.analysis_status = "running"
+        await session.commit()
+
+        fens, sans = chess_service.game_positions(game.pgn)
+        if not fens:
+            game.analysis_status = "error"
+            await session.commit()
+            return
+        evals = await chess_engine_service.analyze_game(fens, depth=12)
+        if evals is None:
+            game.analysis_status = "error"
+            await session.commit()
+            logger.warning(f"analyze_game_task: engine unavailable for {game_id}")
+            return
+        game.analysis_json = chess_service.build_analysis_report(sans, evals)
+        game.analysis_status = "done"
+        await session.commit()
+        logger.info(f"analyze_game_task: {game_id} -> {game.analysis_json['summary']}")
+
+
 class WorkerSettings:
     """arq worker configuration."""
 
@@ -1317,6 +1349,7 @@ class WorkerSettings:
         regenerate_plan_task,
         reembed_all_pages_task,
         ai_pre_review_draft_task,
+        arq_func(analyze_game_task, timeout=1800),
     ]
     redis_settings = _get_redis_settings()
     max_jobs = settings.worker_max_jobs

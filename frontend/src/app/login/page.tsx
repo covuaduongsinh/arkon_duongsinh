@@ -103,7 +103,11 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p className="text-center text-xs text-muted-foreground mt-6">
+        <p className="text-center text-sm text-muted-foreground mt-6">
+          Học viên mới?{" "}
+          <a href="/register" className="text-primary hover:underline">Đăng ký tại đây</a>
+        </p>
+        <p className="text-center text-xs text-muted-foreground mt-2">
           Arkon v0.5 — On-Premise Deployment
         </p>
       </div>

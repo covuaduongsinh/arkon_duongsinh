@@ -1,0 +1,168 @@
+"""Unit tests for the chess module's pure logic (no DB required).
+
+Run inside the api container where deps are installed:
+    docker exec arkon_api python -m pytest tests/test_chess.py -q
+"""
+
+import types
+
+import pytest
+
+from app.database.models import ChessMatch, Employee
+from app.services import chess_service
+from app.services import chess_match_service as ms
+from app.services import permissions as perms
+from app.services.permission_engine import build_chess_filter, can_access_chess
+
+OPERA_PGN = """[Event "Paris Opera"]
+[White "Paul Morphy"]
+[Black "Duke Karl"]
+[Result "1-0"]
+[ECO "C41"]
+[Opening "Philidor Defense"]
+
+1. e4 e5 2. Nf3 d6 3. d4 Bg4 4. dxe5 Bxf3 5. Qxf3 dxe5 6. Bc4 Nf6 7. Qb3 Qe7
+8. Nc3 c6 9. Bg5 b5 10. Nxb5 cxb5 11. Bxb5+ Nbd7 12. O-O-O Rd8 13. Rxd7 Rxd7
+14. Rd1 Qe6 15. Bxd7+ Nxd7 16. Qb8+ Nxb8 17. Rd8# 1-0
+"""
+
+START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+
+# ── PGN parsing ──
+
+def test_parse_pgn_opera_game():
+    games = chess_service.parse_pgn(OPERA_PGN)
+    assert len(games) == 1
+    g = games[0]
+    assert g["white"] == "Paul Morphy"
+    assert g["black"] == "Duke Karl"
+    assert g["result"] == "1-0"
+    assert g["eco"] == "C41"
+    assert g["ply_count"] == 33  # 17 moves, mate on move 17 for white
+    assert g["final_fen"] and g["final_fen"].endswith("b k - 1 17")
+
+
+def test_parse_pgn_multi_game():
+    games = chess_service.parse_pgn(OPERA_PGN + "\n\n" + OPERA_PGN)
+    assert len(games) == 2
+
+
+def test_parse_pgn_invalid_raises():
+    with pytest.raises(ValueError):
+        chess_service.parse_pgn("this is not pgn at all")
+
+
+# ── FEN validation ──
+
+def test_validate_fen_ok():
+    assert chess_service.validate_fen(START_FEN).startswith("rnbqkbnr")
+
+
+def test_validate_fen_bad():
+    with pytest.raises(ValueError):
+        chess_service.validate_fen("not-a-fen")
+
+
+# ── RBAC filters ──
+
+def _user(role="employee", global_role="viewer"):
+    return Employee(name="t", email="t@x.com", role=role, global_role=global_role)
+
+
+def test_build_chess_filter_admin_unrestricted():
+    needs, depts = build_chess_filter(_user(role="admin"), "read")
+    assert needs is False and depts == []
+
+
+def test_build_chess_filter_all_scope_unrestricted():
+    # knowledge_manager has chess:read:all
+    needs, depts = build_chess_filter(_user(global_role="knowledge_manager"), "read")
+    assert needs is False
+
+
+def test_build_chess_filter_own_dept():
+    # student has chess:read:own_dept; no departments -> only global rows
+    needs, depts = build_chess_filter(_user(global_role="student"), "read")
+    assert needs is True and depts == []
+
+
+def test_build_chess_filter_no_permission():
+    # viewer has no chess:create
+    needs, depts = build_chess_filter(_user(global_role="viewer"), "create")
+    assert needs is True and depts is None
+
+
+def test_can_access_chess_global_visible():
+    obj = types.SimpleNamespace(scope_type="global", scope_id=None)
+    assert can_access_chess(_user(global_role="student"), obj, "read") is True
+
+
+def test_can_access_chess_other_department_denied():
+    import uuid
+    obj = types.SimpleNamespace(scope_type="department", scope_id=uuid.uuid4())
+    assert can_access_chess(_user(global_role="student"), obj, "read") is False
+
+
+def test_can_access_chess_admin_always():
+    import uuid
+    obj = types.SimpleNamespace(scope_type="department", scope_id=uuid.uuid4())
+    assert can_access_chess(_user(role="admin"), obj, "delete") is True
+
+
+# ── Permissions catalog ──
+
+def test_check_puzzle_step_multi_move():
+    sol = ["e2e4", "e7e5", "g1f3"]  # solver e4, reply e5, solver Nf3
+    # solver's first move correct → reply with opponent's e5, not solved yet
+    r1 = chess_service.check_puzzle_step(sol, ["e2e4"])
+    assert r1 == {"correct": True, "solved": False, "reply_uci": "e7e5"}
+    # solver completes the line → solved
+    r2 = chess_service.check_puzzle_step(sol, ["e2e4", "e7e5", "g1f3"])
+    assert r2["correct"] is True and r2["solved"] is True
+    # wrong final move
+    r3 = chess_service.check_puzzle_step(sol, ["e2e4", "e7e5", "b1c3"])
+    assert r3["correct"] is False and r3["solved"] is False
+
+
+def test_game_positions_and_report():
+    fens, sans = chess_service.game_positions(OPERA_PGN)
+    assert len(sans) == 33 and len(fens) == 34
+    # Fabricate evals: flat 20cp, then a big drop at ply 3 (white blunders).
+    evals = [{"eval_cp": 20, "mate": None, "best_move": None} for _ in fens]
+    evals[3] = {"eval_cp": -400, "mate": None, "best_move": None}  # after move 3 (black to move)
+    report = chess_service.build_analysis_report(sans, evals)
+    assert len(report["evals"]) == len(fens)
+    assert len(report["moves"]) == len(sans)
+    # ply 3 is white's move (index 2) going from +20 to -400 -> blunder
+    assert report["moves"][2]["class"] == "blunder"
+    assert report["summary"]["blunder"] >= 1
+
+
+def test_chess_permissions_registered():
+    for p in ("chess:read:all", "chess:play", "chess:coach", "chess:create:own_dept"):
+        assert p in perms.ALL_PERMISSIONS
+    assert "student" in perms.ROLE_PERMISSIONS_MAP
+    assert "chess:play" in perms.ROLE_PERMISSIONS_MAP["student"]
+
+
+# ── Match logic (no DB) ──
+
+def test_turn_color():
+    assert ms._turn_color(START_FEN) == "white"
+
+
+def test_record_move_and_finish_scholars_mate():
+    import chess
+    # Position one move before Scholar's mate: White Qh5xf7#
+    fen = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 0 1"
+    match = ChessMatch(mode="human_vs_human", status="active", current_fen=fen, moves=[])
+    board = chess.Board(fen)
+    move = chess.Move.from_uci("h5f7")
+    board2 = ms._record_move(match, board, move, by="white")
+    assert match.moves[-1]["san"].startswith("Qxf7")
+    assert match.current_fen == board2.fen()
+    ended = ms._maybe_finish(match, board2)
+    assert ended is True
+    assert match.status == "finished"
+    assert match.result == "1-0"

@@ -701,6 +701,26 @@ class Employee(Base):
         DateTime(timezone=True), nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-student puzzle rating (Elo), updated on each terminal puzzle attempt.
+    puzzle_rating: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1200, server_default="1200",
+    )
+    # --- Self-signup students / external users (Roadmap A) ---
+    is_external: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+        comment="True for self-registered external users (students/customers). "
+                "Internal staff accounts stay False.",
+    )
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
+    verification_token_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True,
+        comment="HMAC-SHA256 of the email-verification token. Null once verified.",
+    )
+    verification_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
     last_connected: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -1301,4 +1321,421 @@ class StatsDailyRollup(Base):
         Index("ix_stats_rollup_date", "date"),
         Index("ix_stats_rollup_metric", "metric_key", "date"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Chess module — games, puzzles, positions (FEN), study sets, sparring matches
+# ---------------------------------------------------------------------------
+# Scope follows the same dual-realm RBAC as Source/WikiPage: scope_type
+# ("global" | "department") + scope_id (department UUID when departmental).
+# A "global" row is visible to everyone with chess:read; a "department" row is
+# visible to members of that department (+ :all holders / admins).
+# See app/services/permission_engine.build_chess_filter / can_access_chess.
+
+# Standard starting position (used as ChessMatch default).
+CHESS_START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+
+class ChessGame(Base):
+    """A stored chess game (imported PGN, recorded sparring match, or manual entry).
+
+    `pgn` is the authoritative move text; the denormalized header columns
+    (white/black/result/eco/...) are extracted at import time for fast search
+    and listing without re-parsing the PGN.
+    """
+    __tablename__ = "chess_games"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pgn: Mapped[str] = mapped_column(Text, nullable=False)
+    headers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Denormalized PGN seven-tag-roster + ratings for search/listing.
+    white: Mapped[Optional[str]] = mapped_column(String(200))
+    black: Mapped[Optional[str]] = mapped_column(String(200))
+    result: Mapped[Optional[str]] = mapped_column(String(10))  # 1-0 | 0-1 | 1/2-1/2 | *
+    eco: Mapped[Optional[str]] = mapped_column(String(4))
+    opening_name: Mapped[Optional[str]] = mapped_column(String(300))
+    white_elo: Mapped[Optional[int]] = mapped_column(Integer)
+    black_elo: Mapped[Optional[int]] = mapped_column(Integer)
+    event: Mapped[Optional[str]] = mapped_column(String(300))
+    # PGN dates are frequently partial ("2021.??.??"), so kept as the raw string.
+    played_at: Mapped[Optional[str]] = mapped_column(String(20))
+    ply_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    final_fen: Mapped[Optional[str]] = mapped_column(String(120))
+    knowledge_type_slugs: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, default=list,
+    )
+    # "import" | "sparring" | "manual"
+    source_game: Mapped[str] = mapped_column(String(20), nullable=False, default="import")
+    # Logical pointer to chess_matches.id when source_game="sparring". No DB-level
+    # FK to avoid a circular dependency with chess_matches.game_id.
+    match_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Async whole-game engine analysis: none | queued | running | done | error.
+    analysis_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="none", server_default="none",
+    )
+    # {evals: [white-POV cp per position], moves: [{ply, san, class}], ...}
+    analysis_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    scope_type: Mapped[str] = mapped_column(
+        String(20), default=ScopeType.GLOBAL.value,
+        comment="Scope type: global or department",
+    )
+    scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True,
+        comment="Department ID when scope_type=department. Null for global.",
+    )
+    contributed_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    contributor: Mapped[Optional["Employee"]] = relationship(
+        foreign_keys=[contributed_by_employee_id]
+    )
+
+    __table_args__ = (
+        Index("ix_chess_games_scope", "scope_type", "scope_id"),
+        Index("ix_chess_games_eco", "eco"),
+        Index("ix_chess_games_result", "result"),
+    )
+
+
+class ChessPuzzle(Base):
+    """A tactics/endgame puzzle: a position plus its expected solution line."""
+    __tablename__ = "chess_puzzles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    fen: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Expected solution moves in UCI (e.g. ["e2e4", "e7e5"]). The mover to start
+    # is whoever is to move in `fen`.
+    solution_moves: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, default=list,
+    )
+    side_to_move: Mapped[str] = mapped_column(String(1), nullable=False, default="w")  # w | b
+    themes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    rating: Mapped[Optional[int]] = mapped_column(Integer)
+    popularity: Mapped[Optional[int]] = mapped_column(Integer)
+    source_game_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_games.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    title: Mapped[Optional[str]] = mapped_column(String(300))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    # Coaches stage puzzles privately, then publish for students.
+    is_published: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
+    scope_type: Mapped[str] = mapped_column(String(20), default=ScopeType.GLOBAL.value)
+    scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_chess_puzzles_scope", "scope_type", "scope_id"),
+        Index("ix_chess_puzzles_rating", "rating"),
+        Index("ix_chess_puzzles_published", "is_published"),
+    )
+
+
+class ChessPuzzleAttempt(Base):
+    """One student attempt at a puzzle — drives progress/scoring."""
+    __tablename__ = "chess_puzzle_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    puzzle_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_puzzles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    solved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    moves_played: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    time_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    hints_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rating_before: Mapped[Optional[int]] = mapped_column(Integer)
+    rating_after: Mapped[Optional[int]] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_chess_puzzle_attempts_employee", "employee_id", "created_at"),
+        Index("ix_chess_puzzle_attempts_puzzle", "puzzle_id"),
+    )
+
+
+class ChessPosition(Base):
+    """A saved FEN position, optionally with a cached engine evaluation."""
+    __tablename__ = "chess_positions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    fen: Mapped[str] = mapped_column(String(120), nullable=False)
+    label: Mapped[Optional[str]] = mapped_column(String(300))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    # Cached engine evaluation (centipawns from White's POV) — filled by the
+    # server engine / MCP analyze_position tool.
+    eval_cp: Mapped[Optional[int]] = mapped_column(Integer)
+    best_move: Mapped[Optional[str]] = mapped_column(String(10))
+    eval_depth: Mapped[Optional[int]] = mapped_column(Integer)
+    themes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    scope_type: Mapped[str] = mapped_column(String(20), default=ScopeType.GLOBAL.value)
+    scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("scope_type", "scope_id", "fen", name="uq_chess_positions_scope_fen"),
+        Index("ix_chess_positions_scope", "scope_type", "scope_id"),
+    )
+
+
+class ChessStudySet(Base):
+    """A curated collection of games/puzzles/positions for teaching."""
+    __tablename__ = "chess_study_sets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="mixed")  # opening|tactics|endgame|mixed
+    # Optional companion wiki page (theory written through the MRP/wiki pipeline).
+    wiki_slug: Mapped[Optional[str]] = mapped_column(String(300))
+    scope_type: Mapped[str] = mapped_column(String(20), default=ScopeType.GLOBAL.value)
+    scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    items: Mapped[list["ChessStudyItem"]] = relationship(
+        back_populates="study_set", cascade="all, delete-orphan",
+        order_by="ChessStudyItem.position",
+    )
+
+    __table_args__ = (
+        Index("ix_chess_study_sets_scope", "scope_type", "scope_id"),
+    )
+
+
+class ChessStudyItem(Base):
+    """One ordered item inside a ChessStudySet (a game, puzzle, or FEN)."""
+    __tablename__ = "chess_study_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    study_set_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_study_sets.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_type: Mapped[str] = mapped_column(String(20), nullable=False)  # game|puzzle|fen
+    game_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_games.id", ondelete="SET NULL"), nullable=True,
+    )
+    puzzle_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_puzzles.id", ondelete="SET NULL"), nullable=True,
+    )
+    fen_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_positions.id", ondelete="SET NULL"), nullable=True,
+    )
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    study_set: Mapped["ChessStudySet"] = relationship(back_populates="items")
+
+    __table_args__ = (
+        Index("ix_chess_study_items_set", "study_set_id", "position"),
+    )
+
+
+class ChessMatch(Base):
+    """A sparring match (human-vs-human or human-vs-engine).
+
+    Defined in the Phase-1 migration but only exercised in Phase 3. `moves` is
+    the authoritative state read by polling / websocket clients; on finish the
+    match is archived into a ChessGame (game_id).
+    """
+    __tablename__ = "chess_matches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # Null side = engine.
+    white_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True,
+    )
+    black_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True,
+    )
+    mode: Mapped[str] = mapped_column(String(20), nullable=False, default="human_vs_engine")
+    engine_level: Mapped[Optional[int]] = mapped_column(Integer)
+    # pending | active | finished | aborted
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    current_fen: Mapped[str] = mapped_column(String(120), nullable=False, default=CHESS_START_FEN)
+    moves: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    result: Mapped[Optional[str]] = mapped_column(String(10))
+    time_control: Mapped[Optional[str]] = mapped_column(String(30))
+    winner_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True,
+    )
+    game_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_games.id", ondelete="SET NULL"), nullable=True,
+    )
+    scope_type: Mapped[str] = mapped_column(String(20), default=ScopeType.GLOBAL.value)
+    scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_chess_matches_status", "status"),
+        Index("ix_chess_matches_white", "white_employee_id"),
+        Index("ix_chess_matches_black", "black_employee_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chess LMS — classes, lessons, assignments (Roadmap D)
+# ---------------------------------------------------------------------------
+
+class ChessClass(Base):
+    """A teaching class/cohort: a coach + a roster of students."""
+    __tablename__ = "chess_classes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    coach_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True,
+    )
+    scope_type: Mapped[str] = mapped_column(String(20), default=ScopeType.GLOBAL.value)
+    scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    members: Mapped[list["ChessClassMember"]] = relationship(
+        back_populates="chess_class", cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (Index("ix_chess_classes_coach", "coach_employee_id"),)
+
+
+class ChessClassMember(Base):
+    """Membership of an employee in a class (role: student | coach)."""
+    __tablename__ = "chess_class_members"
+
+    class_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_classes.id", ondelete="CASCADE"), primary_key=True,
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), primary_key=True,
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="student")
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    chess_class: Mapped["ChessClass"] = relationship(back_populates="members")
+    employee: Mapped["Employee"] = relationship()
+
+    __table_args__ = (Index("ix_chess_class_members_employee", "employee_id"),)
+
+
+class ChessLesson(Base):
+    """A markdown teaching lesson within a class (may embed ```pgn/```fen)."""
+    __tablename__ = "chess_lessons"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    class_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_classes.id", ondelete="CASCADE"), nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    content_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    study_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_study_sets.id", ondelete="SET NULL"), nullable=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (Index("ix_chess_lessons_class", "class_id", "position"),)
+
+
+class ChessAssignment(Base):
+    """Homework: a set of puzzles (or a study set / lesson) assigned to a class
+    with an optional due date. Per-student completion is computed from attempts."""
+    __tablename__ = "chess_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    class_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_classes.id", ondelete="CASCADE"), nullable=False,
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="puzzles")  # puzzles|study|lesson
+    puzzle_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, default=list,
+    )
+    study_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_study_sets.id", ondelete="SET NULL"), nullable=True,
+    )
+    lesson_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_lessons.id", ondelete="SET NULL"), nullable=True,
+    )
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_chess_assignments_class", "class_id"),)
 

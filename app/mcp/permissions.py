@@ -79,6 +79,30 @@ CAN_REVIEW_WIKI = ToolRequirement(
 CAN_CREATE_WIKI_DIRECT = CAN_REVIEW_WIKI
 
 
+def _can_read_chess(identity: ResolvedIdentity) -> bool:
+    """Anyone with a chess:read grant (or admin) can see chess read tools."""
+    return (
+        identity.is_admin
+        or identity.has_any_permission("chess:read:own_dept", "chess:read:all")
+    )
+
+
+def _can_coach_chess(identity: ResolvedIdentity) -> bool:
+    """Coach-tier: manage study sets / publish puzzles."""
+    return identity.is_admin or identity.has_permission("chess:coach")
+
+
+CAN_READ_CHESS = ToolRequirement(
+    predicate=_can_read_chess,
+    label="chess:read:*",
+)
+
+CAN_COACH_CHESS = ToolRequirement(
+    predicate=_can_coach_chess,
+    label="chess:coach",
+)
+
+
 # ---------------------------------------------------------------------------
 # Decorator
 # ---------------------------------------------------------------------------

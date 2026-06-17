@@ -9,21 +9,27 @@ Two system roles:
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.database.models import Employee
 from app.services.auth_service import (
+    audience_for,
     authenticate_employee,
     create_access_token,
     get_current_user,
     hash_password,
+    register_student,
+    verify_email_token,
     verify_password,
 )
 from app.services.permission_engine import get_effective_permissions
+from app.utils.rate_limit import check_rate_limit
 
 router = APIRouter()
 
@@ -107,6 +113,7 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         employee_id=str(employee.id),
         role=employee.role,
         name=employee.name,
+        audience=audience_for(employee),
     )
 
     permissions = get_effective_permissions(employee)
@@ -116,6 +123,86 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         access_token=token,
         user=_build_user_dict(employee, permissions, []),
     )
+
+
+# ---------------------------------------------------------------------------
+# Public student self-signup (Roadmap A) — gated by enable_student_signup
+# ---------------------------------------------------------------------------
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+@router.post("/auth/register")
+async def register(
+    req: RegisterRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Self-register a student/external account. Disabled unless
+    `enable_student_signup` is set. The account is inactive until an admin
+    approves it (or email verification completes) unless auto-activate is on.
+    """
+    if not settings.enable_student_signup:
+        raise HTTPException(403, "Self-signup is currently disabled. Contact an administrator.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    allowed = await check_rate_limit(
+        f"signup:{client_ip}", settings.signup_rate_limit_per_hour, 3600
+    )
+    if not allowed:
+        raise HTTPException(429, "Too many sign-up attempts. Please try again later.")
+
+    try:
+        student, raw_token = await register_student(
+            db, name=req.name, email=req.email, password=req.password,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    await db.commit()
+
+    # No SMTP configured by default — log the verification link so an operator
+    # can retrieve it. When email is wired, send it here instead.
+    base = (settings.portal_base_url or "").rstrip("/")
+    verify_link = f"{base}/verify-email?token={raw_token}" if base else f"/verify-email?token={raw_token}"
+    logger.info(f"[student-signup] {student.email} verification link: {verify_link}")
+
+    if settings.student_signup_auto_activate:
+        return {"status": "active", "message": "Account created. You can now sign in."}
+    return {
+        "status": "pending",
+        "message": "Account created. It will be activated after email verification "
+                   "or admin approval.",
+    }
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+@router.post("/auth/verify-email", response_model=LoginResponse)
+async def verify_email(req: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    """Verify a student's email from the token and sign them in."""
+    student = await verify_email_token(db, req.token)
+    if not student:
+        raise HTTPException(400, "Invalid or expired verification link.")
+    await db.commit()
+    # Reload with departments eager-loaded for the user payload.
+    from sqlalchemy.orm import selectinload
+    from app.database.models import EmployeeDepartment
+    full = (await db.execute(
+        select(Employee)
+        .where(Employee.id == student.id)
+        .options(selectinload(Employee.employee_departments).selectinload(EmployeeDepartment.department))
+    )).scalar_one()
+    token = create_access_token(
+        employee_id=str(full.id), role=full.role, name=full.name,
+        audience=audience_for(full),
+    )
+    permissions = get_effective_permissions(full)
+    return LoginResponse(access_token=token, user=_build_user_dict(full, permissions, []))
 
 
 @router.get("/auth/me", response_model=ProfileResponse)

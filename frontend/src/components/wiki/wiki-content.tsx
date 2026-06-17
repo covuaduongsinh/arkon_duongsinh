@@ -4,6 +4,8 @@ import React from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ChessBoard } from "@/components/chess/ChessBoard";
+import { PgnViewer } from "@/components/chess/PgnViewer";
 import {
   Table,
   TableBody,
@@ -257,6 +259,28 @@ export function WikiContent({
                   return String(child);
                 })
                 .join("");
+
+              // Detect ```pgn / ```fen fenced blocks and render an interactive
+              // board instead of a plain code block (chess module integration).
+              const firstChild = React.Children.toArray(children)[0];
+              const lang = React.isValidElement(firstChild)
+                ? ((firstChild.props as { className?: string }).className ?? "")
+                : "";
+              if (lang.includes("language-pgn") && codeText.trim()) {
+                return (
+                  <div className="my-5">
+                    <PgnViewer pgn={codeText} />
+                  </div>
+                );
+              }
+              if (lang.includes("language-fen") && codeText.trim()) {
+                return (
+                  <div className="my-5">
+                    <ChessBoard fen={codeText.trim()} className="max-w-[360px]" />
+                  </div>
+                );
+              }
+
               return (
                 <div className="relative group/code">
                   <pre className="bg-surface border border-border rounded-xl p-4 overflow-x-auto my-5 text-sm">

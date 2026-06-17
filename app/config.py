@@ -69,6 +69,27 @@ class Settings(BaseSettings):
                     "'/wiki/source/<id>' paths.",
     )
 
+    # --- Student / external self-signup (Roadmap A) ---
+    enable_student_signup: bool = Field(
+        default=False,
+        description="Master switch for the public student self-signup endpoint. "
+                    "Keep False until you intend to expose a public registration surface.",
+    )
+    student_signup_auto_activate: bool = Field(
+        default=False,
+        description="If True, self-registered students are active immediately. "
+                    "If False (default), they stay inactive until an admin approves "
+                    "(or email verification succeeds) — safer.",
+    )
+    student_department_name: str = Field(
+        default="Students",
+        description="Department new self-signup students are placed in (auto-created).",
+    )
+    signup_rate_limit_per_hour: int = Field(
+        default=5,
+        description="Max self-signup attempts per client IP per hour.",
+    )
+
     # --- Redis (arq worker queue) ---
     redis_host: str = Field(default="localhost")
     redis_port: int = Field(default=6379)

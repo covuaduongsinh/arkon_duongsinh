@@ -23,7 +23,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import get_db
-from app.database.models import Employee, EmployeeDepartment
+from app.database.models import Department, Employee, EmployeeDepartment
 
 # JWT config
 JWT_ALGORITHM = "HS256"
@@ -50,12 +50,26 @@ def verify_password(password: str, password_hash: str) -> bool:
 # JWT tokens
 # ---------------------------------------------------------------------------
 
-def create_access_token(employee_id: str, role: str, name: str) -> str:
+# JWT audiences — separate internal staff tokens from external/student tokens
+# so a student token can never be used where an internal-only check requires it.
+AUD_INTERNAL = "arkon:internal"
+AUD_STUDENT = "arkon:student"
+
+
+def audience_for(employee: Employee) -> str:
+    """Pick the token audience for an employee."""
+    if getattr(employee, "is_external", False) or getattr(employee, "global_role", "") == "student":
+        return AUD_STUDENT
+    return AUD_INTERNAL
+
+
+def create_access_token(employee_id: str, role: str, name: str, audience: str = AUD_INTERNAL) -> str:
     """Create a signed JWT token."""
     payload = {
         "sub": employee_id,
         "role": role,
         "name": name,
+        "aud": audience,
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS),
         "iat": datetime.now(timezone.utc),
     }
@@ -63,13 +77,34 @@ def create_access_token(employee_id: str, role: str, name: str) -> str:
 
 
 def decode_access_token(token: str) -> Optional[dict]:
-    """Decode and validate a JWT token. Returns payload or None."""
+    """Decode and validate a JWT token. Returns payload or None.
+
+    Audience is not enforced here (verify_aud=False) so legacy tokens without an
+    `aud` claim keep working; callers that need to restrict by audience read
+    `payload["aud"]` themselves (see require_internal).
+    """
     try:
-        return jwt.decode(token, settings.secret_key, algorithms=[JWT_ALGORITHM])
+        return jwt.decode(
+            token, settings.secret_key, algorithms=[JWT_ALGORITHM],
+            options={"verify_aud": False},
+        )
     except jwt.ExpiredSignatureError:
         return None
     except jwt.InvalidTokenError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Email-verification token hashing (HMAC, like MCP tokens)
+# ---------------------------------------------------------------------------
+
+def hash_verification_token(token: str) -> str:
+    """HMAC-SHA256 the email-verification token for at-rest storage."""
+    import hashlib
+    import hmac
+    return hmac.new(
+        settings.secret_key.encode("utf-8"), token.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +134,83 @@ async def authenticate_employee(
     if not verify_password(password, employee.password_hash):
         return None
     return employee
+
+
+# ---------------------------------------------------------------------------
+# Student / external self-signup (Roadmap A)
+# ---------------------------------------------------------------------------
+
+async def _get_or_create_student_department(db: AsyncSession) -> Department:
+    name = settings.student_department_name
+    dept = (await db.execute(
+        select(Department).where(Department.name == name)
+    )).scalar_one_or_none()
+    if dept is None:
+        dept = Department(name=name, description="Self-registered students / external users")
+        db.add(dept)
+        await db.flush()
+    return dept
+
+
+async def register_student(
+    db: AsyncSession, *, name: str, email: str, password: str,
+) -> tuple[Employee, Optional[str]]:
+    """Create a self-signup student account.
+
+    Returns (employee, raw_verification_token). The account is inactive unless
+    `student_signup_auto_activate` is set; an admin (or email verification)
+    activates it. Raises ValueError on duplicate email / weak input.
+    """
+    import secrets
+
+    email = email.strip().lower()
+    name = name.strip()
+    if not name or "@" not in email:
+        raise ValueError("A valid name and email are required")
+    if len(password) < 8:
+        raise ValueError("Password must be at least 8 characters")
+
+    existing = (await db.execute(
+        select(Employee).where(Employee.email == email)
+    )).scalar_one_or_none()
+    if existing is not None:
+        raise ValueError("An account with this email already exists")
+
+    dept = await _get_or_create_student_department(db)
+
+    raw_token = secrets.token_urlsafe(32)
+    student = Employee(
+        name=name,
+        email=email,
+        password_hash=hash_password(password),
+        role="employee",
+        global_role="student",
+        is_external=True,
+        email_verified=False,
+        is_active=bool(settings.student_signup_auto_activate),
+        verification_token_hash=hash_verification_token(raw_token),
+        verification_sent_at=datetime.now(timezone.utc),
+    )
+    db.add(student)
+    await db.flush()
+    db.add(EmployeeDepartment(employee_id=student.id, department_id=dept.id))
+    await db.flush()
+    return student, raw_token
+
+
+async def verify_email_token(db: AsyncSession, raw_token: str) -> Optional[Employee]:
+    """Mark a student's email verified (and activate them) from a token. None if invalid."""
+    token_hash = hash_verification_token(raw_token)
+    student = (await db.execute(
+        select(Employee).where(Employee.verification_token_hash == token_hash)
+    )).scalar_one_or_none()
+    if student is None:
+        return None
+    student.email_verified = True
+    student.is_active = True
+    student.verification_token_hash = None
+    await db.flush()
+    return student
 
 
 # ---------------------------------------------------------------------------

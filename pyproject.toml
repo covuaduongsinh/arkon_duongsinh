@@ -53,6 +53,8 @@ dependencies = [
     "openpyxl>=3.1",
     "xlrd>=2.0",
     "tabulate>=0.9",
+    # Chess — PGN/FEN parsing & validation (chess module)
+    "chess>=1.11.0",
 ]
 
 [project.optional-dependencies]
