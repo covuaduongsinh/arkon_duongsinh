@@ -26,6 +26,7 @@ type StudySetDetail = {
   title: string;
   description?: string | null;
   kind: string;
+  wiki_slug?: string | null;
   items: StudyItem[];
 };
 
@@ -44,6 +45,9 @@ export default function ChessStudyDetailPage() {
   const [error, setError] = useState<string | null>(null);
   // Options for the "add item" picker, loaded per item type.
   const [pickerOptions, setPickerOptions] = useState<{ id: string; label: string }[]>([]);
+  // Publish-to-wiki (review-gated companion page).
+  const [publishing, setPublishing] = useState(false);
+  const [publishMsg, setPublishMsg] = useState<string | null>(null);
 
   // Load selectable items whenever the coach switches the item type.
   useEffect(() => {
@@ -106,6 +110,23 @@ export default function ChessStudyDetailPage() {
     load();
   }, [load]);
 
+  async function publishWiki() {
+    setPublishing(true);
+    setPublishMsg(null);
+    try {
+      const r = await api<{ draft_id: string; slug: string; status: string }>(
+        `/api/chess/study-sets/${id}/publish-wiki`,
+        { method: "POST" },
+      );
+      setPublishMsg(`Đã gửi vào hàng đợi Duyệt bài (slug: ${r.slug}). Khi được duyệt, trang wiki sẽ xuất hiện.`);
+      await load();
+    } catch (e) {
+      setPublishMsg(e instanceof ApiError ? e.message : "Không thể xuất bản lên wiki");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   async function addItem() {
     if (!refId.trim()) return;
     setError(null);
@@ -129,8 +150,28 @@ export default function ChessStudyDetailPage() {
       <PageHeader
         title={study.title}
         description={study.description || undefined}
-        action={<Badge variant="secondary">{study.kind}</Badge>}
+        action={
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">{study.kind}</Badge>
+            {study.wiki_slug && (
+              <Link href={`/wiki/${study.wiki_slug}`} className="text-sm text-primary hover:underline inline-flex items-center gap-1">
+                <span className="material-symbols-outlined text-sm">menu_book</span>
+                Trang wiki
+              </Link>
+            )}
+            {canCoach && (
+              <Button variant="outline" size="sm" onClick={publishWiki} disabled={publishing} className="gap-1.5">
+                <span className="material-symbols-outlined text-sm">upload</span>
+                {publishing ? "Đang gửi…" : "Xuất bản lên Wiki"}
+              </Button>
+            )}
+          </div>
+        }
       />
+
+      {publishMsg && (
+        <p className="rounded-md border border-black/10 bg-muted/40 px-3 py-2 text-sm text-muted-foreground">{publishMsg}</p>
+      )}
 
       {canCoach && (
         <div className="flex flex-wrap items-end gap-2 rounded-lg border border-black/10 bg-card p-4">

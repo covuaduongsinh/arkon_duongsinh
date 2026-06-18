@@ -1532,6 +1532,11 @@ class ChessStudySet(Base):
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="mixed")  # opening|tactics|endgame|mixed
     # Optional companion wiki page (theory written through the MRP/wiki pipeline).
     wiki_slug: Mapped[Optional[str]] = mapped_column(String(300))
+    # Verbatim Source that mirrors this study set into the semantic search pool
+    # (auto-indexed so search_wiki / explain_opening surface it). See chess_service.
+    indexed_source_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"), nullable=True,
+    )
     scope_type: Mapped[str] = mapped_column(String(20), default=ScopeType.GLOBAL.value)
     scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -1697,6 +1702,12 @@ class ChessLesson(Base):
     content_md: Mapped[str] = mapped_column(Text, nullable=False, default="")
     study_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("chess_study_sets.id", ondelete="SET NULL"), nullable=True,
+    )
+    # Optional companion wiki page (set when a publish-to-wiki draft is approved).
+    wiki_slug: Mapped[Optional[str]] = mapped_column(String(300))
+    # Verbatim Source mirroring this lesson into the semantic search pool.
+    indexed_source_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"), nullable=True,
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(

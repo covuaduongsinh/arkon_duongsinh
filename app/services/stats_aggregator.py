@@ -59,6 +59,19 @@ _STOPWORDS_VI = {
     "minh", "ban", "ta", "ho", "duoc", "phai", "se", "da", "dang",
 }
 
+# Substrings (diacritic-free, lowercase) that mark a knowledge gap as chess-related.
+_CHESS_GAP_VOCAB = (
+    "chess", "co vua", "covua", "khai cuoc", "trung cuoc", "tan cuoc", "the co",
+    "nuoc co", "quan co", "chien thuat", "chien luoc", "opening", "endgame",
+    "middlegame", "tactic", "gambit", "sicilian", "najdorf", "fork", "skewer",
+    "checkmate", "stalemate", "fen", "pgn", "elo", "puzzle", "stockfish",
+)
+
+
+def _is_chess_query(norm: str) -> bool:
+    """True if a normalized query string looks chess-related (for gap labeling)."""
+    return any(term in norm for term in _CHESS_GAP_VOCAB)
+
 
 def _norm_text(text: str) -> str:
     """Lowercase, strip punctuation, drop stopwords. For grouping zero-result queries."""
@@ -132,6 +145,29 @@ async def _rollup_content(session: AsyncSession, target_date: date) -> list[dict
     # Snapshot: total pages
     total_pages = (await session.execute(select(func.count(WikiPage.id)))).scalar() or 0
     rows.append({"metric_key": "wiki.pages.total", "value_numeric": float(total_pages)})
+
+    # Chess knowledge coverage: pages tagged with a chess-family knowledge type,
+    # plus chess Sources indexed into the search pool (lessons/study sets/games).
+    from app.database.models import KnowledgeType, Source
+
+    chess_slugs = list((await session.execute(
+        select(KnowledgeType.slug).where(KnowledgeType.slug.like("chess%"))
+    )).scalars().all())
+    chess_pages = 0
+    if chess_slugs:
+        chess_pages = (await session.execute(
+            select(func.count(WikiPage.id)).where(
+                WikiPage.knowledge_type_slugs.overlap(chess_slugs)
+            )
+        )).scalar() or 0
+    rows.append({"metric_key": "wiki.pages.chess", "value_numeric": float(chess_pages)})
+
+    chess_sources = (await session.execute(
+        select(func.count(Source.id)).where(
+            Source.source_type.like("chess_%"), Source.status == "ready"
+        )
+    )).scalar() or 0
+    rows.append({"metric_key": "chess.sources.indexed", "value_numeric": float(chess_sources)})
 
     # Pages created in the window
     created_today = (await session.execute(
@@ -478,16 +514,20 @@ async def _rollup_gaps(session: AsyncSession, target_date: date) -> list[dict[st
             "count": v["count"],
             "samples": v["samples"],
             "requester_ids": sorted(v["requester_ids"]),
+            "is_chess": _is_chess_query(k),
         }
         for k, v in grouped.items()
     ]
     items.sort(key=lambda x: x["count"], reverse=True)
     items = items[:100]
 
-    return [{
-        "metric_key": "mcp.gaps.zero_result",
-        "value_json": {"items": items},
-    }]
+    # Chess-specific gap volume — how much chess knowledge is still missing.
+    chess_gap_total = sum(it["count"] for it in items if it["is_chess"])
+
+    return [
+        {"metric_key": "mcp.gaps.zero_result", "value_json": {"items": items}},
+        {"metric_key": "chess.gaps.count", "value_numeric": float(chess_gap_total)},
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -146,6 +146,48 @@ def test_chess_permissions_registered():
     assert "chess:play" in perms.ROLE_PERMISSIONS_MAP["student"]
 
 
+# ── Knowledge-base linkage helpers (no DB) ──
+
+def test_study_kind_kt_slug_maps_subtopics():
+    assert chess_service.study_kind_kt_slug("opening") == "chess-opening"
+    assert chess_service.study_kind_kt_slug("tactics") == "chess-tactics"
+    assert chess_service.study_kind_kt_slug("endgame") == "chess-endgame"
+    # mixed and unknown kinds fall back to the flat 'chess' type
+    assert chess_service.study_kind_kt_slug("mixed") == "chess"
+    assert chess_service.study_kind_kt_slug("whatever") == "chess"
+
+
+def test_build_lesson_markdown_has_title_and_body():
+    md = chess_service.build_lesson_markdown("Najdorf basics", "Play ...a6 then ...e5.")
+    assert md.startswith("# Najdorf basics")
+    assert "Play ...a6" in md
+    # empty body still produces a heading (so the verbatim source is searchable)
+    assert chess_service.build_lesson_markdown("Empty", "  ").strip() == "# Empty"
+
+
+def test_build_study_set_markdown_includes_parts():
+    md = chess_service.build_study_set_markdown(
+        "Endgame drills", "Rook endings.", "endgame", ["Cut the king off", ""],
+    )
+    assert "# Endgame drills" in md
+    assert "Rook endings." in md
+    assert "_Loại: endgame_" in md
+    assert "- Cut the king off" in md  # non-empty notes are listed
+    assert md.count("- ") == 1  # blank note is dropped
+
+
+# ── Knowledge-gap chess labeling (no DB) ──
+
+def test_is_chess_query_classifier():
+    from app.services.stats_aggregator import _is_chess_query
+
+    assert _is_chess_query("khai cuoc sicilian najdorf") is True
+    assert _is_chess_query("endgame rook technique") is True
+    assert _is_chess_query("how to analyze a pgn file") is True
+    assert _is_chess_query("chinh sach nghi phep cong ty") is False
+    assert _is_chess_query("quarterly revenue report") is False
+
+
 # ── Match logic (no DB) ──
 
 def test_turn_color():

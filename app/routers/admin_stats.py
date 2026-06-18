@@ -210,6 +210,8 @@ CONTENT_SCALAR = [
     "wiki.pages.stale_30d",
     "wiki.pages.orphan",
     "wiki.revisions.daily",
+    "wiki.pages.chess",
+    "chess.sources.indexed",
 ]
 CONTENT_LIST = ["wiki.pages.by_type", "wiki.top_pages"]
 
@@ -303,7 +305,9 @@ async def get_gaps(
                 "count": 0,
                 "samples": [],
                 "requester_ids": set(),
+                "is_chess": bool(item.get("is_chess", False)),
             })
+            bucket["is_chess"] = bucket.get("is_chess", False) or bool(item.get("is_chess", False))
             bucket["count"] += int(item.get("count", 0))
             for s in item.get("samples", []):
                 if s not in bucket["samples"] and len(bucket["samples"]) < 5:

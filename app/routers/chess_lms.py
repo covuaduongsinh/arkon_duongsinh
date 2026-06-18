@@ -21,9 +21,11 @@ from app.database.models import (
     Employee,
 )
 from app.services import chess_lms_service as lms
+from app.services import chess_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import require_permission
 from app.services.permission_engine import _get_user_permissions
+from app.utils.text import slugify
 
 router = APIRouter()
 
@@ -151,7 +153,7 @@ def _lesson_dto(l: ChessLesson) -> dict:
     return {
         "id": str(l.id), "class_id": str(l.class_id), "title": l.title,
         "content_md": l.content_md, "study_set_id": str(l.study_set_id) if l.study_set_id else None,
-        "position": l.position, "created_at": l.created_at.isoformat(),
+        "wiki_slug": l.wiki_slug, "position": l.position, "created_at": l.created_at.isoformat(),
     }
 
 
@@ -166,7 +168,10 @@ async def list_lessons(class_id: uuid.UUID, db: AsyncSession = Depends(get_db), 
 async def create_lesson(class_id: uuid.UUID, body: LessonBody, db: AsyncSession = Depends(get_db), user: Employee = require_permission("chess:coach")):
     cls = await _load_class_or_403(db, class_id, user, manage=True)
     lesson = await lms.create_lesson(db, user, cls, title=body.title, content_md=body.content_md, study_set_id=body.study_set_id)
+    # Auto-index the lesson into the knowledge search pool (verbatim, no LLM).
+    source = await chess_service.index_chess_lesson(db, user, cls, lesson)
     await db.commit()
+    await chess_service.enqueue_chess_index(db, source)
     return _lesson_dto(lesson)
 
 
@@ -177,6 +182,31 @@ async def get_lesson(lesson_id: uuid.UUID, db: AsyncSession = Depends(get_db), u
         raise HTTPException(404, "Không tìm thấy bài giảng")
     await _load_class_or_403(db, lesson.class_id, user)
     return _lesson_dto(lesson)
+
+
+@router.post("/chess/lessons/{lesson_id}/publish-wiki")
+async def publish_lesson_wiki(lesson_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: Employee = require_permission("chess:coach")):
+    """Propose a companion wiki page from this lesson (goes to the review queue)."""
+    lesson = await lms.get_lesson(db, lesson_id)
+    if not lesson:
+        raise HTTPException(404, "Không tìm thấy bài giảng")
+    cls = await _load_class_or_403(db, lesson.class_id, user, manage=True)
+    slug = f"chess-{slugify(lesson.title)}".strip("-") or f"chess-lesson-{lesson.id.hex[:8]}"
+    content_md = (lesson.content_md or "").strip() or chess_service.build_lesson_markdown(lesson.title, "")
+    try:
+        draft = await chess_service.propose_chess_wiki_page(
+            db, user,
+            slug=slug, title=lesson.title, content_md=content_md,
+            kt_slug="chess-strategy",
+            scope_type=cls.scope_type, scope_id=cls.scope_id,
+            note=f"Companion wiki page for lesson '{lesson.title}'",
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    lesson.wiki_slug = slug  # optimistic link; the page is created on approval
+    await log_audit(db, user, "create", "wiki_draft", str(draft.id), reason="lesson → wiki draft")
+    await db.commit()
+    return {"draft_id": str(draft.id), "slug": slug, "status": "pending_review"}
 
 
 @router.delete("/chess/lessons/{lesson_id}")

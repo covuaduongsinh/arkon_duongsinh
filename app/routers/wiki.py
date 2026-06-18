@@ -682,6 +682,53 @@ async def delete_wiki_page(
     return {"ok": True, "deleted_slug": slug}
 
 
+@router.get("/wiki/chess-links/{slug:path}")
+async def get_wiki_page_chess_links(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("wiki:read"),
+):
+    """Chess content linked to this wiki page.
+
+    Returns study sets / lessons whose companion `wiki_slug` is this page, plus
+    chess Sources that fed the page (matched against WikiPage.source_ids). Powers
+    the "Nội dung cờ vua liên quan" block on the wiki page (Phase 2 UI).
+    """
+    from app.database.models import ChessLesson, ChessStudySet, Source
+
+    study_sets = (await db.execute(
+        select(ChessStudySet.id, ChessStudySet.title, ChessStudySet.kind)
+        .where(ChessStudySet.wiki_slug == slug)
+        .order_by(ChessStudySet.created_at.desc())
+    )).all()
+    lessons = (await db.execute(
+        select(ChessLesson.id, ChessLesson.title, ChessLesson.class_id)
+        .where(ChessLesson.wiki_slug == slug)
+        .order_by(ChessLesson.created_at.desc())
+    )).all()
+
+    # Chess Sources that fed this page (game→wiki compiles, verbatim mirrors).
+    page = await wiki_service.get_page_by_slug_any_scope(db, slug)
+    source_items: list[dict] = []
+    if page and page.source_ids:
+        srcs = (await db.execute(
+            select(Source.id, Source.title, Source.source_type).where(
+                Source.id.in_(list(page.source_ids)),
+                Source.source_type.like("chess_%"),
+            )
+        )).all()
+        source_items = [
+            {"id": str(sid), "title": title, "source_type": stype}
+            for sid, title, stype in srcs
+        ]
+
+    return {
+        "study_sets": [{"id": str(i), "title": t, "kind": k} for i, t, k in study_sets],
+        "lessons": [{"id": str(i), "title": t, "class_id": str(c)} for i, t, c in lessons],
+        "sources": source_items,
+    }
+
+
 @router.get("/wiki/graph")
 async def get_wiki_graph(
     slug: Optional[str] = Query(None, description="Center the graph on this slug; omit for full graph"),

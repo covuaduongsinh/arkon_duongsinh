@@ -226,11 +226,12 @@ def register_chess_tools(mcp: FastMCP):
     @logged_tool("explain_opening", query_arg="query")
     async def explain_opening(query: str) -> str:
         """
-        Look up chess opening theory in the wiki (scoped to chess knowledge).
+        Look up chess theory in the wiki and knowledge base (scoped to chess).
 
-        This is a thin wrapper over the wiki search, filtered to chess content —
-        use it for "what's the idea behind the Najdorf" style questions. Follow up
-        with `read_wiki_page(slug)` to read a full page.
+        Searches all chess-tagged knowledge — wiki theory pages AND auto-indexed
+        coach material (lessons, study sets) — not just opening pages. Use it for
+        "what's the idea behind the Najdorf", "show me our endgame material", etc.
+        Follow up with `read_wiki_page(slug)` to read a full page.
 
         Args:
             query: The opening or concept to explain.
@@ -241,33 +242,84 @@ def register_chess_tools(mcp: FastMCP):
             return err
         assert identity is not None
 
+        from sqlalchemy import select
+
         from app.ai.registry import ProviderRegistry
         from app.database import async_session_factory
-        from app.services import wiki_service
+        from app.database.models import Source
+        from app.mcp.tools import _get_allowed_source_ids
+        from app.services import chess_service, wiki_service
 
         async with async_session_factory() as session:
             registry = ProviderRegistry(session)
             embedding_provider = await registry.get_embedding(task="search_query")
             query_embedding = await embedding_provider.embed(query)
-            hits = await wiki_service.search_pages_semantic(
+            # Search all chess-family knowledge types (chess + sub-topics), so
+            # auto-indexed lessons / study sets surface alongside theory pages.
+            family = await chess_service.chess_family_kt_slugs(session)
+            page_hits = await wiki_service.search_pages_semantic(
                 session,
                 query_embedding=query_embedding,
                 top_k=8,
-                allowed_kt_slugs=["chess"],
+                allowed_kt_slugs=family,
                 department_ids=identity.department_ids,
                 all_scopes=identity.is_admin,
             )
 
-        if not hits:
-            return (
-                f"No chess wiki pages found for: \"{query}\". "
-                "Opening theory may not have been imported yet."
+            # Coach material indexed as verbatim Sources (lessons, study sets,
+            # games). Restrict to chess sources ∩ the caller's RBAC-allowed set.
+            chess_src_ids = {
+                str(i) for i in (await session.execute(
+                    select(Source.id).where(Source.source_type.like("chess_%"))
+                )).scalars().all()
+            }
+            allowed = await _get_allowed_source_ids(identity, session)
+            scoped = chess_src_ids if allowed is None else (chess_src_ids & allowed)
+            chunk_hits = (
+                await wiki_service.search_source_chunks_semantic(
+                    session,
+                    query_embedding=query_embedding,
+                    top_k=8,
+                    allowed_source_ids=scoped,
+                )
+                if scoped
+                else []
             )
-        lines = [f"**Chess wiki — {len(hits)} result(s) for: \"{query}\"**\n"]
-        for page, sim in hits:
-            entry = f"- `{page.slug}` — {sim:.0%}\n  **{page.title}**"
-            if page.summary:
-                entry += f" — {page.summary}"
-            entry += f"\n  _Read: `read_wiki_page(\"{page.slug}\")`_"
+
+        # Collapse chunks per source (best similarity), then merge with pages.
+        grouped: dict = {}
+        for source, chunk, sim in chunk_hits:
+            g = grouped.get(source.id)
+            if g is None or sim > g["sim"]:
+                preview = (chunk.text or "").strip().replace("\n", " ")
+                if len(preview) > 160:
+                    preview = preview[:160] + "…"
+                grouped[source.id] = {"source": source, "sim": sim, "preview": preview}
+
+        ranked = [("page", sim, page) for page, sim in page_hits]
+        ranked += [("source", g["sim"], g) for g in grouped.values()]
+        ranked.sort(key=lambda r: r[1], reverse=True)
+        ranked = ranked[:8]
+
+        if not ranked:
+            return (
+                f"No chess knowledge found for: \"{query}\". "
+                "Theory or coach material may not have been imported yet."
+            )
+        lines = [f"**Chess knowledge — {len(ranked)} result(s) for: \"{query}\"**\n"]
+        for kind, sim, obj in ranked:
+            if kind == "page":
+                page = obj
+                entry = f"- `{page.slug}` — {sim:.0%} · wiki page\n  **{page.title}**"
+                if page.summary:
+                    entry += f" — {page.summary}"
+                entry += f"\n  _Read: `read_wiki_page(\"{page.slug}\")`_"
+            else:
+                src = obj["source"]
+                entry = (
+                    f"- {sim:.0%} · {src.source_type}\n  **{src.title or 'Chess material'}**"
+                    f"\n  {obj['preview']}"
+                    f"\n  _Full text: `get_source(\"{src.id}\")`_"
+                )
             lines.append(entry)
         return "\n".join(lines)

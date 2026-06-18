@@ -347,6 +347,229 @@ async def game_to_source(session: AsyncSession, user: Employee, game: ChessGame)
     return source
 
 
+# ---------------------------------------------------------------------------
+# Knowledge-base linkage: chess content → searchable verbatim Source
+#
+# Lessons / study sets are mirrored into a preserve_verbatim Source so they are
+# auto-indexed into the same semantic search pool as wiki pages (search_wiki,
+# explain_opening) WITHOUT running the LLM/MRP pipeline. Games keep using
+# game_to_source above (full MRP compile → wiki theory). Building a curated
+# wiki page is a separate, review-gated step (see the publish-wiki endpoints).
+# ---------------------------------------------------------------------------
+
+# Study-set kind → chess sub-topic knowledge-type slug (seeded in migration 042).
+_STUDY_KIND_TO_KT = {
+    "opening": "chess-opening",
+    "tactics": "chess-tactics",
+    "endgame": "chess-endgame",
+    "mixed": "chess",
+}
+
+
+def study_kind_kt_slug(kind: str) -> str:
+    """Map a study-set kind to its chess sub-topic knowledge-type slug."""
+    return _STUDY_KIND_TO_KT.get(kind, "chess")
+
+
+async def chess_family_kt_slugs(session: AsyncSession) -> list[str]:
+    """All knowledge-type slugs in the chess family (every slug starting 'chess').
+
+    Used to scope wiki search to chess content: the flat 'chess' type plus the
+    sub-topics from migration 042 (chess-opening, chess-tactics, chess-endgame,
+    chess-strategy, chess-game). Falls back to ['chess'] if not yet seeded.
+    """
+    from app.database.models import KnowledgeType
+
+    slugs = list((await session.execute(
+        select(KnowledgeType.slug).where(KnowledgeType.slug.like("chess%"))
+    )).scalars().all())
+    return slugs or ["chess"]
+
+
+async def _kt_id_for_slug(session: AsyncSession, slug: str) -> Optional[uuid.UUID]:
+    """Resolve a knowledge-type slug to its id, falling back to the 'chess' type."""
+    from app.database.models import KnowledgeType
+
+    kt = (await session.execute(
+        select(KnowledgeType).where(KnowledgeType.slug == slug)
+    )).scalar_one_or_none()
+    if kt is None and slug != "chess":
+        kt = (await session.execute(
+            select(KnowledgeType).where(KnowledgeType.slug == "chess")
+        )).scalar_one_or_none()
+    return kt.id if kt else None
+
+
+def build_lesson_markdown(title: str, content_md: str) -> str:
+    body = (content_md or "").strip()
+    return f"# {title.strip()}\n\n{body}\n" if body else f"# {title.strip()}\n"
+
+
+def build_study_set_markdown(
+    title: str, description: Optional[str], kind: str, notes: list[str],
+) -> str:
+    lines = [f"# {title.strip()}", ""]
+    if description:
+        lines += [description.strip(), ""]
+    lines.append(f"_Loại: {kind}_")
+    if notes:
+        lines += ["", "## Ghi chú"] + [f"- {n.strip()}" for n in notes if n and n.strip()]
+    return "\n".join(lines) + "\n"
+
+
+async def _upsert_verbatim_source(
+    session: AsyncSession,
+    user: Employee,
+    *,
+    existing_id: Optional[uuid.UUID],
+    title: str,
+    full_text: str,
+    kt_slug: str,
+    scope_type: str,
+    scope_id: Optional[uuid.UUID],
+    source_type: str,
+):
+    """Create or refresh a preserve_verbatim Source mirroring chess content.
+
+    Re-indexing an existing source resets it to 'pending' so the worker re-embeds
+    the new text. Returns the Source — the caller enqueues ingestion and commits.
+    """
+    from app.database.models import Source
+
+    kt_id = await _kt_id_for_slug(session, kt_slug)
+    source = await session.get(Source, existing_id) if existing_id else None
+    if source is None:
+        source = Source(
+            source_type=source_type,
+            preserve_verbatim=True,
+            contributed_by_employee_id=user.id,
+        )
+        session.add(source)
+    source.title = title
+    source.full_text = full_text
+    source.knowledge_type_id = kt_id
+    source.scope_type = scope_type
+    source.scope_id = scope_id
+    source.status = "pending"
+    source.progress = 0
+    source.progress_message = "Queued for verbatim indexing..."
+    source.error_message = None
+    source.page_offsets = None
+    await session.flush()
+    return source
+
+
+async def index_chess_lesson(session: AsyncSession, user: Employee, cls, lesson):
+    """(Re)index a lesson as a verbatim Source. Inherits the class's scope."""
+    source = await _upsert_verbatim_source(
+        session, user,
+        existing_id=lesson.indexed_source_id,
+        title=f"Chess lesson: {lesson.title}",
+        full_text=build_lesson_markdown(lesson.title, lesson.content_md),
+        kt_slug="chess-strategy",
+        scope_type=cls.scope_type,
+        scope_id=cls.scope_id,
+        source_type="chess_lesson",
+    )
+    lesson.indexed_source_id = source.id
+    await session.flush()
+    return source
+
+
+async def index_chess_study_set(session: AsyncSession, user: Employee, study: ChessStudySet):
+    """(Re)index a study set as a verbatim Source (title + description + item notes)."""
+    # Pull notes directly — study.items may be stale right after add_study_item.
+    notes = list((await session.execute(
+        select(ChessStudyItem.note)
+        .where(ChessStudyItem.study_set_id == study.id, ChessStudyItem.note.isnot(None))
+        .order_by(ChessStudyItem.position)
+    )).scalars().all())
+    source = await _upsert_verbatim_source(
+        session, user,
+        existing_id=study.indexed_source_id,
+        title=f"Chess study set: {study.title}",
+        full_text=build_study_set_markdown(study.title, study.description, study.kind, notes),
+        kt_slug=_STUDY_KIND_TO_KT.get(study.kind, "chess"),
+        scope_type=study.scope_type,
+        scope_id=study.scope_id,
+        source_type="chess_study",
+    )
+    study.indexed_source_id = source.id
+    await session.flush()
+    return source
+
+
+async def enqueue_chess_index(session: AsyncSession, source) -> None:
+    """Best-effort enqueue of the verbatim ingestion job for a chess Source.
+
+    Failure to enqueue (e.g. the queue is unavailable) must NOT break the primary
+    write (creating the lesson/study set) — the Source stays 'pending' and can be
+    re-indexed later. The worker honours preserve_verbatim and skips the LLM.
+    """
+    try:
+        from app.worker import get_arq_pool
+
+        pool = await get_arq_pool()
+        job = await pool.enqueue_job("ingest_map_reduce_task", str(source.id))
+        if job:
+            source.job_id = job.job_id
+            await session.commit()
+    except Exception as e:  # noqa: BLE001 — indexing is best-effort
+        from loguru import logger
+
+        logger.warning(f"enqueue_chess_index failed for source {source.id}: {e}")
+
+
+async def propose_chess_wiki_page(
+    session: AsyncSession,
+    user: Employee,
+    *,
+    slug: str,
+    title: str,
+    content_md: str,
+    kt_slug: str,
+    scope_type: str,
+    scope_id: Optional[uuid.UUID],
+    note: Optional[str] = None,
+):
+    """Create a review-gated WikiPageDraft (draft_kind='create') for chess content.
+
+    The page is NOT written directly — it lands in the wiki review queue ("Duyệt
+    bài") and is materialised only when an editor approves. Reuses the existing
+    draft workflow (wiki_service.create_draft). Raises ValueError if a page with
+    this slug already exists in the target scope (propose an edit instead).
+    """
+    from app.services import wiki_service
+
+    existing = await wiki_service.get_page_by_slug(
+        session, slug, scope_type=scope_type, scope_id=scope_id,
+    )
+    if existing is not None:
+        raise ValueError(
+            f"Trang wiki '{slug}' đã tồn tại trong phạm vi này — hãy sửa trang đó thay vì tạo mới."
+        )
+    family = await chess_family_kt_slugs(session)
+    kt_slugs = [kt_slug] if kt_slug in family else ["chess"]
+    draft = await wiki_service.create_draft(
+        session,
+        page_id=None,
+        author_id=user.id,
+        content_md=content_md,
+        note=note,
+        source="web_ui",
+        draft_kind="create",
+        suggested_metadata={
+            "slug": slug,
+            "title": title,
+            "page_type": "concept",
+            "knowledge_type_slugs": kt_slugs,
+            "scope_type": scope_type,
+            "scope_id": str(scope_id) if scope_id else None,
+        },
+    )
+    return draft
+
+
 async def delete_game(session: AsyncSession, game: ChessGame) -> None:
     await session.delete(game)
 

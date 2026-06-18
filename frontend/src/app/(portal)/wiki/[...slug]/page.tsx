@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { WikiPageDetail, DraftResponse } from "@/types/wiki";
 import { WikiPageTree } from "@/components/wiki/wiki-page-tree";
 import { WikiContent } from "@/components/wiki/wiki-content";
+import { WikiChessLinks } from "@/components/wiki/wiki-chess-links";
 import { WikiSidebarRight } from "@/components/wiki/wiki-backlinks";
 import { WikiEditor } from "@/components/wiki/wiki-editor";
 import { WikiDraftBanner } from "@/components/wiki/wiki-draft-banner";
@@ -850,6 +851,9 @@ export default function WikiPageViewer() {
               ) : (
                 <div className="space-y-6">
                   <WikiContent markdown={contentWithFootnotes} linkSuffix={scopeLinkSuffix} />
+
+                  {/* Phase 2: chess content linked to this page (two-way link) */}
+                  <WikiChessLinks slug={fullSlug} linkSuffix={scopeLinkSuffix} />
 
                   {/* References card deck section at bottom of concept pages */}
                   {citations.length > 0 && (

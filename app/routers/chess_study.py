@@ -17,6 +17,7 @@ from app.services import chess_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import require_permission
 from app.services.permission_engine import _get_user_permissions, can_access_chess
+from app.utils.text import slugify
 
 router = APIRouter()
 
@@ -106,7 +107,10 @@ async def create_study_set(
     except ValueError as e:
         raise HTTPException(400, str(e))
     await log_audit(db, user, "create", "chess_study_set", str(study.id))
+    # Auto-index into the knowledge search pool (verbatim, no LLM).
+    source = await chess_service.index_chess_study_set(db, user, study)
     await db.commit()
+    await chess_service.enqueue_chess_index(db, source)
     return _summary(study)
 
 
@@ -149,8 +153,46 @@ async def add_item(
     except ValueError as e:
         raise HTTPException(400, str(e))
     await log_audit(db, user, "update", "chess_study_set", str(set_id))
+    # Re-index so the new item's note is reflected in knowledge search.
+    source = await chess_service.index_chess_study_set(db, user, study)
     await db.commit()
+    await chess_service.enqueue_chess_index(db, source)
     return StudyItem.model_validate(item)
+
+
+@router.post("/chess/study-sets/{set_id}/publish-wiki")
+async def publish_study_set_wiki(
+    set_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:create"),
+):
+    """Propose a companion wiki page for this study set (goes to the review queue)."""
+    _require_coach(user)
+    study = await chess_service.get_study_set(db, set_id)
+    if not study:
+        raise HTTPException(404, "Study set not found")
+    if not can_access_chess(user, study, "edit"):
+        raise HTTPException(403, "Access denied")
+
+    slug = f"chess-{slugify(study.title)}".strip("-") or f"chess-study-{study.id.hex[:8]}"
+    notes = [i.note for i in study.items if i.note]
+    content_md = chess_service.build_study_set_markdown(
+        study.title, study.description, study.kind, notes,
+    )
+    try:
+        draft = await chess_service.propose_chess_wiki_page(
+            db, user,
+            slug=slug, title=study.title, content_md=content_md,
+            kt_slug=chess_service.study_kind_kt_slug(study.kind),
+            scope_type=study.scope_type, scope_id=study.scope_id,
+            note=f"Companion wiki page for study set '{study.title}'",
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    study.wiki_slug = slug  # optimistic link; the page is created on approval
+    await log_audit(db, user, "create", "wiki_draft", str(draft.id), reason="study set → wiki draft")
+    await db.commit()
+    return {"draft_id": str(draft.id), "slug": slug, "status": "pending_review"}
 
 
 @router.delete("/chess/study-sets/{set_id}")
