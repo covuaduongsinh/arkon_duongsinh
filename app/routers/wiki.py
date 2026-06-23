@@ -50,6 +50,7 @@ class WikiPageSummary(BaseModel):
     scope_id: Optional[uuid.UUID] = None
     scope_name: Optional[str] = None
     version: int
+    created_at: str = ""
     updated_at: str
 
 
@@ -157,6 +158,7 @@ def _summary(p: WikiPage, scope_name: Optional[str] = None) -> WikiPageSummary:
         scope_id=p.scope_id,
         scope_name=scope_name,
         version=p.version or 1,
+        created_at=p.created_at.isoformat() if p.created_at else "",
         updated_at=p.updated_at.isoformat() if p.updated_at else "",
     )
 
@@ -208,6 +210,7 @@ async def list_wiki_pages(
     knowledge_family: Optional[str] = Query(None, description="Filter to a knowledge-type family, e.g. 'chess' (matches any chess-* slug)"),
     scope_type: Optional[str] = Query(None, description="Filter to a specific scope: global, department, or project"),
     scope_id: Optional[str] = Query(None, description="UUID of the scope (required for department/project)"),
+    sort: str = Query("updated", description="Sort order: 'updated' (recently edited) or 'created' (recently created)"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -236,7 +239,9 @@ async def list_wiki_pages(
         .select_from(WikiPage)
         .outerjoin(Department, and_(WikiPage.scope_id == Department.id, WikiPage.scope_type == "department"))
         .where(WikiPage.slug.notin_([wiki_service.INDEX_SLUG, wiki_service.LOG_SLUG, wiki_service.HOT_SLUG]))
-        .order_by(WikiPage.updated_at.desc())
+        .order_by(
+            WikiPage.created_at.desc() if sort == "created" else WikiPage.updated_at.desc()
+        )
         .limit(limit)
         .offset(offset)
     )

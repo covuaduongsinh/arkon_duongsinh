@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { Button } from "@/components/ui/button";
 import { BarList, LineChart } from "@/components/stats/charts";
 import { WikiStatusBadge } from "@/components/wiki/wiki-status-badge";
+import { RecentWikiPagesCard } from "@/components/dashboard/recent-wiki-pages-card";
 import WikiIndexPage from "./wiki/page";
 
 /* ──────────────────────────────────────────────────────────────────────── */
@@ -391,6 +392,8 @@ function OverviewTab({ data }: { data: OverviewResponse | null }) {
           )}
         </div>
       </div>
+
+      <RecentWikiPagesCard />
 
       <div className="text-[11px] text-muted-foreground">As of {data.as_of}</div>
     </div>
