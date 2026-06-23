@@ -11,9 +11,12 @@ Two additions that improve wikilink quality and connectivity:
     lesson's content_md `[[slug]]` patterns, mirroring wiki_links. Lets a concept
     page surface "which lessons reference me" (chess ↔ wiki, second direction).
 
-Revision ID: 043_wiki_aliases_and_lesson_links
+Revision ID: 043_wiki_aliases_lesson_links
 Revises: 042_chess_knowledge_links
 Create Date: 2026-06-23
+
+Note: the revision id is kept <= 32 chars because alembic_version.version_num
+is VARCHAR(32); a longer id fails at the final stamp (StringDataRightTruncation).
 """
 
 import sqlalchemy as sa
@@ -21,7 +24,7 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "043_wiki_aliases_and_lesson_links"
+revision = "043_wiki_aliases_lesson_links"
 down_revision = "042_chess_knowledge_links"
 branch_labels = None
 depends_on = None
