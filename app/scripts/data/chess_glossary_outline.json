@@ -1,0 +1,163 @@
+[
+  {
+    "title": "Nguyên tắc khai cuộc cơ bản",
+    "slug": "nguyen-tac-khai-cuoc-co-ban",
+    "kt_slug": "chess-opening",
+    "hint": "Kiểm soát trung tâm, phát triển quân nhẹ, nhập thành sớm, không đi một quân nhiều lần, không đưa Hậu ra quá sớm.",
+    "aliases": ["khai cuộc", "opening", "opening principles", "nguyên tắc khai cuộc"]
+  },
+  {
+    "title": "Phát triển quân nhẹ",
+    "slug": "phat-trien-quan-nhe",
+    "kt_slug": "chess-opening",
+    "hint": "Đưa Mã và Tượng ra ô hoạt động sớm; mỗi nước nên phát triển một quân mới; nối thông hàng cuối để Xe phối hợp.",
+    "aliases": ["phát triển quân", "phát triển", "development", "piece development"]
+  },
+  {
+    "title": "Nhập thành",
+    "slug": "nhap-thanh",
+    "kt_slug": "chess-opening",
+    "hint": "Luật nhập thành gần (O-O) và xa (O-O-O), điều kiện hợp lệ, vai trò bảo vệ Vua và kích hoạt Xe.",
+    "aliases": ["nhập thành", "castling", "o-o", "o-o-o", "nhập thành gần", "nhập thành xa"]
+  },
+  {
+    "title": "Khai cuộc Ý (Giuoco Piano)",
+    "slug": "khai-cuoc-y-giuoco-piano",
+    "kt_slug": "chess-opening",
+    "hint": "1.e4 e5 2.Nf3 Nc6 3.Bc4 Bc5 — ý tưởng, kế hoạch hai bên, các bẫy thường gặp.",
+    "aliases": ["giuoco piano", "italian game", "khai cuộc ý", "ván ý"]
+  },
+  {
+    "title": "Khai cuộc Ruy López (Tây Ban Nha)",
+    "slug": "khai-cuoc-ruy-lopez",
+    "kt_slug": "chess-opening",
+    "hint": "1.e4 e5 2.Nf3 Nc6 3.Bb5 — áp lực lên Mã c6, các biến chính (Morphy, Berlin), kế hoạch trung cuộc.",
+    "aliases": ["ruy lopez", "ruy lópez", "spanish opening", "tây ban nha", "khai cuộc tây ban nha"]
+  },
+  {
+    "title": "Phòng thủ Sicilian",
+    "slug": "phong-thu-sicilian",
+    "kt_slug": "chess-opening",
+    "hint": "1.e4 c5 — phản công bất đối xứng cho Đen; các nhánh Najdorf, Dragon, Scheveningen; tranh chấp trung tâm và cánh.",
+    "aliases": ["sicilian", "sicilian defense", "phòng thủ sicilia", "sicilia", "ván sicilian"]
+  },
+  {
+    "title": "Phòng thủ Pháp (French Defense)",
+    "slug": "phong-thu-phap-french",
+    "kt_slug": "chess-opening",
+    "hint": "1.e4 e6 — cấu trúc Tốt khoá, Tượng ô trắng 'xấu', phá trung tâm bằng ...c5/...f6; kế hoạch hai cánh.",
+    "aliases": ["french defense", "french", "phòng thủ pháp", "ván pháp"]
+  },
+  {
+    "title": "Gambit Hậu (Queen's Gambit)",
+    "slug": "gambit-hau",
+    "kt_slug": "chess-opening",
+    "hint": "1.d4 d5 2.c4 — thí tốt c4 tạm thời để giành trung tâm; nhánh nhận (QGA) và từ chối (QGD).",
+    "aliases": ["queen's gambit", "queens gambit", "gambit hậu", "thí tốt hậu", "qgd", "qga"]
+  },
+  {
+    "title": "Đòn chiến thuật: Nĩa (Fork)",
+    "slug": "chien-thuat-nia-fork",
+    "kt_slug": "chess-tactics",
+    "hint": "Một quân tấn công hai mục tiêu cùng lúc; ví dụ nĩa Mã, nĩa Tốt, nĩa Hậu.",
+    "aliases": ["fork", "nĩa", "nia", "đòn nĩa", "nĩa mã"]
+  },
+  {
+    "title": "Đòn chiến thuật: Ghim (Pin) và Xiên (Skewer)",
+    "slug": "chien-thuat-ghim-xien",
+    "kt_slug": "chess-tactics",
+    "hint": "Phân biệt ghim tuyệt đối/tương đối và đòn xiên; cách khai thác và hoá giải.",
+    "aliases": ["pin", "skewer", "ghim", "xiên", "xien", "ghim xiên", "ghim tuyệt đối"]
+  },
+  {
+    "title": "Đòn đôi (Double Attack)",
+    "slug": "chien-thuat-don-doi",
+    "kt_slug": "chess-tactics",
+    "hint": "Tạo hai đe doạ cùng lúc mà đối phương không thể gỡ cả hai; quan hệ với nĩa và đòn phát hiện.",
+    "aliases": ["double attack", "đòn đôi", "tấn công đôi", "đòn kép"]
+  },
+  {
+    "title": "Đòn phát hiện (Discovered Attack)",
+    "slug": "chien-thuat-phat-hien",
+    "kt_slug": "chess-tactics",
+    "hint": "Di chuyển quân chắn để mở đường tấn công của quân phía sau; trường hợp mạnh nhất là chiếu phát hiện.",
+    "aliases": ["discovered attack", "discovery", "đòn phát hiện", "chiếu phát hiện", "discovered check"]
+  },
+  {
+    "title": "Thí quân (Sacrifice)",
+    "slug": "chien-thuat-thi-quan",
+    "kt_slug": "chess-tactics",
+    "hint": "Hy sinh vật chất để đổi lấy đòn tấn công, thế trận hoặc chiếu hết; phân biệt thí thật và thí giả (tạm thời).",
+    "aliases": ["sacrifice", "thí quân", "thí", "sac", "hy sinh quân"]
+  },
+  {
+    "title": "Các thế chiếu hết kiểu mẫu",
+    "slug": "chieu-het-kieu-mau",
+    "kt_slug": "chess-tactics",
+    "hint": "Chiếu hết hàng cuối, chiếu hết bằng Hậu+Tượng, chiếu hết Mã (smothered mate), chiếu hết hai Xe.",
+    "aliases": ["checkmate patterns", "mating patterns", "chiếu hết", "chiếu bí", "mate", "chiếu hết hàng cuối", "smothered mate"]
+  },
+  {
+    "title": "Tàn cuộc Vua và Tốt: luật ô vuông",
+    "slug": "tan-cuoc-vua-tot-luat-o-vuong",
+    "kt_slug": "chess-endgame",
+    "hint": "Quy tắc ô vuông để biết Vua có kịp bắt Tốt thông; khái niệm đối mặt (opposition).",
+    "aliases": ["luật ô vuông", "rule of the square", "king and pawn", "vua tốt", "square rule", "tàn cuộc vua tốt"]
+  },
+  {
+    "title": "Khái niệm Đối mặt (Opposition)",
+    "slug": "khai-niem-doi-mat-opposition",
+    "kt_slug": "chess-endgame",
+    "hint": "Hai Vua đối diện cách một ô; bên không phải đi sẽ 'giữ đối mặt' và giành ô tới hạn — chìa khoá tàn cuộc Vua-Tốt.",
+    "aliases": ["opposition", "đối mặt", "đối diện vua", "thế đối mặt", "giành đối mặt"]
+  },
+  {
+    "title": "Tàn cuộc Xe: thế Lucena và Philidor",
+    "slug": "tan-cuoc-xe-lucena-philidor",
+    "kt_slug": "chess-endgame",
+    "hint": "Lucena (bên mạnh thắng nhờ 'bắc cầu'), Philidor (bên yếu thủ hoà).",
+    "aliases": ["lucena", "philidor", "rook endgame", "tàn cuộc xe", "thế lucena", "thế philidor"]
+  },
+  {
+    "title": "Tốt thông và phong hậu",
+    "slug": "tot-thong-phong-hau",
+    "kt_slug": "chess-endgame",
+    "hint": "Tốt thông là Tốt không bị Tốt đối phương cản; giá trị tăng dần khi tiến gần hàng phong cấp; kỹ thuật hỗ trợ phong hậu.",
+    "aliases": ["passed pawn", "tốt thông", "promotion", "phong hậu", "phong cấp", "tốt thông qua"]
+  },
+  {
+    "title": "Kiểm soát trung tâm",
+    "slug": "kiem-soat-trung-tam",
+    "kt_slug": "chess-strategy",
+    "hint": "Vai trò các ô d4-e4-d5-e5; trung tâm Tốt cổ điển so với kiểm soát trung tâm từ xa (hypermodern).",
+    "aliases": ["center control", "trung tâm", "kiểm soát trung tâm", "control the center", "trung tâm tốt"]
+  },
+  {
+    "title": "Cấu trúc Tốt và kế hoạch trung cuộc",
+    "slug": "cau-truc-tot-va-ke-hoach-trung-cuoc",
+    "kt_slug": "chess-strategy",
+    "hint": "Tốt cô lập, Tốt chồng, Tốt thông, lỗ hổng; cách chọn kế hoạch theo cấu trúc.",
+    "aliases": ["pawn structure", "cấu trúc tốt", "cấu trúc pion", "middlegame plan", "kế hoạch trung cuộc"]
+  },
+  {
+    "title": "Tốt cô lập (Isolated Pawn)",
+    "slug": "tot-co-lap",
+    "kt_slug": "chess-strategy",
+    "hint": "Tốt không có Tốt cùng phe ở cột bên cạnh; điểm yếu lâu dài nhưng cho không gian và cột mở; thế IQP điển hình.",
+    "aliases": ["isolated pawn", "tốt cô lập", "iqp", "isolani", "tốt lẻ"]
+  },
+  {
+    "title": "Tốt chồng (Doubled Pawns)",
+    "slug": "tot-chong",
+    "kt_slug": "chess-strategy",
+    "hint": "Hai Tốt cùng phe trên một cột; thường là điểm yếu nhưng có thể bù lại bằng cột mở và kiểm soát ô.",
+    "aliases": ["doubled pawns", "tốt chồng", "tốt đôi", "tốt chập"]
+  },
+  {
+    "title": "Cột mở và sức mạnh quân Xe",
+    "slug": "cot-mo-va-suc-manh-xe",
+    "kt_slug": "chess-strategy",
+    "hint": "Cột không còn Tốt; chiếm cột mở bằng Xe, xâm nhập hàng 7; cột nửa mở để gây áp lực lên Tốt đối phương.",
+    "aliases": ["open file", "cột mở", "xe trên cột mở", "rook on open file", "cột nửa mở", "hàng bảy"]
+  }
+]
