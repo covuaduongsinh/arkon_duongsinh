@@ -16,7 +16,8 @@ from typing import Optional
 
 import chess
 import chess.pgn
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import (
@@ -476,6 +477,39 @@ async def index_chess_lesson(session: AsyncSession, user: Employee, cls, lesson)
     return source
 
 
+async def refresh_lesson_links(session: AsyncSession, lesson) -> None:
+    """Rewrite chess_lesson_links edges from a lesson's `[[slug]]` references.
+
+    Mirrors wiki_service.refresh_links but originates from a chess lesson. Alias
+    targets (VN/EN synonyms) are resolved to canonical wiki slugs so a `[[fork]]`
+    in a lesson connects to chien-thuat-nia-fork. This is what lets a concept
+    page surface "which lessons reference me" (chess ↔ wiki, second direction).
+    """
+    from app.database.models import ChessLessonLink
+    from app.services import wiki_service
+
+    await session.execute(
+        delete(ChessLessonLink).where(ChessLessonLink.lesson_id == lesson.id)
+    )
+    raw_targets = wiki_service.extract_wikilinks(lesson.content_md or "")
+    if not raw_targets:
+        return
+    # Chess concept pages live in global scope, so resolve aliases against it.
+    alias_map = await wiki_service.build_alias_map(session, "global", None)
+    seen: set[str] = set()
+    targets: list[str] = []
+    for t in raw_targets:
+        canonical = alias_map.get(t.lower(), t)
+        if canonical not in seen:
+            seen.add(canonical)
+            targets.append(canonical)
+    await session.execute(
+        pg_insert(ChessLessonLink)
+        .values([{"lesson_id": lesson.id, "to_slug": t} for t in targets])
+        .on_conflict_do_nothing()
+    )
+
+
 async def index_chess_study_set(session: AsyncSession, user: Employee, study: ChessStudySet):
     """(Re)index a study set as a verbatim Source (title + description + item notes)."""
     # Pull notes directly — study.items may be stale right after add_study_item.
@@ -531,6 +565,7 @@ async def propose_chess_wiki_page(
     scope_type: str,
     scope_id: Optional[uuid.UUID],
     note: Optional[str] = None,
+    aliases: Optional[list[str]] = None,
 ):
     """Create a review-gated WikiPageDraft (draft_kind='create') for chess content.
 
@@ -563,6 +598,7 @@ async def propose_chess_wiki_page(
             "title": title,
             "page_type": "concept",
             "knowledge_type_slugs": kt_slugs,
+            "aliases": list(aliases or []),
             "scope_type": scope_type,
             "scope_id": str(scope_id) if scope_id else None,
         },

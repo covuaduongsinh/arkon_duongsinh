@@ -170,6 +170,9 @@ async def create_lesson(class_id: uuid.UUID, body: LessonBody, db: AsyncSession 
     lesson = await lms.create_lesson(db, user, cls, title=body.title, content_md=body.content_md, study_set_id=body.study_set_id)
     # Auto-index the lesson into the knowledge search pool (verbatim, no LLM).
     source = await chess_service.index_chess_lesson(db, user, cls, lesson)
+    # Parse the lesson's [[slug]] references into the chess_lesson_links graph so
+    # concept pages can surface "which lessons reference me".
+    await chess_service.refresh_lesson_links(db, lesson)
     await db.commit()
     await chess_service.enqueue_chess_index(db, source)
     return _lesson_dto(lesson)

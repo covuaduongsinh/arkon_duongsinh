@@ -45,6 +45,7 @@ class WikiPageSummary(BaseModel):
     summary: str
     knowledge_type_slugs: list[str]
     source_ids: list[uuid.UUID]
+    aliases: list[str] = []
     scope_type: str = "global"
     scope_id: Optional[uuid.UUID] = None
     scope_name: Optional[str] = None
@@ -151,6 +152,7 @@ def _summary(p: WikiPage, scope_name: Optional[str] = None) -> WikiPageSummary:
         summary=p.summary or "",
         knowledge_type_slugs=p.knowledge_type_slugs or [],
         source_ids=list(p.source_ids or []),
+        aliases=list(p.aliases or []),
         scope_type=p.scope_type or "global",
         scope_id=p.scope_id,
         scope_name=scope_name,
@@ -699,11 +701,12 @@ async def get_wiki_page_chess_links(
 ):
     """Chess content linked to this wiki page.
 
-    Returns study sets / lessons whose companion `wiki_slug` is this page, plus
+    Returns study sets / lessons whose companion `wiki_slug` is this page, lessons
+    that *reference* this page via a `[[slug]]` wikilink (chess_lesson_links), plus
     chess Sources that fed the page (matched against WikiPage.source_ids). Powers
     the "Nội dung cờ vua liên quan" block on the wiki page (Phase 2 UI).
     """
-    from app.database.models import ChessLesson, ChessStudySet, Source
+    from app.database.models import ChessLesson, ChessLessonLink, ChessStudySet, Source
 
     study_sets = (await db.execute(
         select(ChessStudySet.id, ChessStudySet.title, ChessStudySet.kind)
@@ -715,6 +718,16 @@ async def get_wiki_page_chess_links(
         .where(ChessLesson.wiki_slug == slug)
         .order_by(ChessLesson.created_at.desc())
     )).all()
+    companion_ids = {i for i, _t, _c in lessons}
+    # Lessons that reference this page through a [[slug]] wikilink (the second
+    # direction: not the companion page, but lessons that cite this concept).
+    referencing = (await db.execute(
+        select(ChessLesson.id, ChessLesson.title, ChessLesson.class_id)
+        .join(ChessLessonLink, ChessLessonLink.lesson_id == ChessLesson.id)
+        .where(ChessLessonLink.to_slug == slug)
+        .order_by(ChessLesson.created_at.desc())
+    )).all()
+    referencing = [(i, t, c) for i, t, c in referencing if i not in companion_ids]
 
     # Chess Sources that fed this page (game→wiki compiles, verbatim mirrors).
     page = await wiki_service.get_page_by_slug_any_scope(db, slug)
@@ -734,6 +747,9 @@ async def get_wiki_page_chess_links(
     return {
         "study_sets": [{"id": str(i), "title": t, "kind": k} for i, t, k in study_sets],
         "lessons": [{"id": str(i), "title": t, "class_id": str(c)} for i, t, c in lessons],
+        "referencing_lessons": [
+            {"id": str(i), "title": t, "class_id": str(c)} for i, t, c in referencing
+        ],
         "sources": source_items,
     }
 

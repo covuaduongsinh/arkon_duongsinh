@@ -11,6 +11,7 @@ import { api } from "@/lib/api";
 type ChessLinks = {
   study_sets: { id: string; title: string; kind: string }[];
   lessons: { id: string; title: string; class_id: string }[];
+  referencing_lessons: { id: string; title: string; class_id: string }[];
   sources: { id: string; title: string; source_type: string }[];
 };
 
@@ -32,9 +33,11 @@ export function WikiChessLinks({ slug, linkSuffix = "" }: { slug: string; linkSu
     };
   }, [slug]);
 
+  const referencing = data?.referencing_lessons ?? [];
   const total =
     (data?.study_sets.length ?? 0) +
     (data?.lessons.length ?? 0) +
+    referencing.length +
     (data?.sources.length ?? 0);
   if (!data || total === 0) return null;
 
@@ -54,6 +57,19 @@ export function WikiChessLinks({ slug, linkSuffix = "" }: { slug: string; linkSu
             <span className="material-symbols-outlined text-primary">menu_book</span>
             <div className="min-w-0">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Bài giảng</div>
+              <div className="text-sm font-medium text-foreground truncate">{l.title}</div>
+            </div>
+          </Link>
+        ))}
+        {referencing.map((l) => (
+          <Link
+            key={`ref-lesson-${l.id}`}
+            href={`/chess/lessons/${l.id}`}
+            className="rounded-xl border bg-card p-3 flex items-center gap-3 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <span className="material-symbols-outlined text-primary">link</span>
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Bài giảng nhắc tới</div>
               <div className="text-sm font-medium text-foreground truncate">{l.title}</div>
             </div>
           </Link>

@@ -25,9 +25,12 @@ function score(page: WikiPageSummary, q: string): number {
   const ql = q.toLowerCase();
   const slug = page.slug.toLowerCase();
   const title = page.title.toLowerCase();
-  if (slug === ql || title === ql) return 100;
-  if (slug.startsWith(ql) || title.startsWith(ql)) return 50;
-  if (slug.includes(ql) || title.includes(ql)) return 20;
+  const aliases = (page.aliases ?? []).map((a) => a.toLowerCase());
+  if (slug === ql || title === ql || aliases.includes(ql)) return 100;
+  if (slug.startsWith(ql) || title.startsWith(ql) || aliases.some((a) => a.startsWith(ql)))
+    return 50;
+  if (slug.includes(ql) || title.includes(ql) || aliases.some((a) => a.includes(ql)))
+    return 20;
   return -1;
 }
 
