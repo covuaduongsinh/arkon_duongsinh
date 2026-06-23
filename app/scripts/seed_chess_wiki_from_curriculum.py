@@ -24,21 +24,16 @@ Outline JSON format (optional — a built-in default is used when omitted):
 import asyncio
 import json
 import sys
-from pathlib import Path
 
 from loguru import logger
 from sqlalchemy import select
 
 from app.database import async_session_factory
 from app.database.models import Employee, WikiPage, WikiPageDraft
-from app.services import chess_service, wiki_service
+from app.services import chess_service
 
 # Knowledge-type slugs that are valid here (the chess family, migration 042).
 VALID_KT = {"chess", "chess-opening", "chess-tactics", "chess-endgame", "chess-strategy", "chess-game"}
-
-# Curated chess glossary used by default — a stable set of concept pages with
-# canonical slugs + VN/EN aliases, so generated wikilinks have real destinations.
-DEFAULT_OUTLINE_PATH = Path(__file__).with_name("data") / "chess_glossary_outline.json"
 
 # Built-in starter curriculum — a teacher can replace it with a JSON file.
 DEFAULT_OUTLINE: list[dict] = [
@@ -70,42 +65,17 @@ SYSTEM_PROMPT = (
     "chuyên môn bằng TIẾNG VIỆT cho giáo viên dạy cờ. Viết rõ ràng, chính xác, có cấu "
     "trúc. Dùng Markdown: bắt đầu bằng '# Tiêu đề', sau đó các mục con (##). Khi minh hoạ "
     "thế cờ, dùng khối ```fen với một FEN hợp lệ; khi minh hoạ chuỗi nước, dùng khối ```pgn. "
-    "BẮT BUỘC chèn ÍT NHẤT 3 liên kết [[slug]] tới các khái niệm liên quan, và CHỈ ĐƯỢC "
-    "dùng các slug có trong 'DANH SÁCH TRANG' được cung cấp — KHÔNG bịa slug mới. Dùng "
-    "[[slug|chữ hiển thị tiếng Việt]] khi muốn chữ hiển thị khác slug. KHÔNG bịa nguồn, "
-    "KHÔNG thêm lời chào hay phần kết thừa — chỉ nội dung trang."
+    "Có thể dùng [[wikilink]] để liên kết tới khái niệm liên quan. KHÔNG bịa nguồn, KHÔNG "
+    "thêm lời chào hay phần kết thừa — chỉ nội dung trang."
 )
 
 
-def _build_link_menu(outline: list[dict], existing_pages: list[tuple[str, str]]) -> str:
-    """Render the 'DANH SÁCH TRANG' the LLM may link to: outline slugs + already
-    published chess wiki pages. Each line is `slug — title (alias, alias)`."""
-    seen: set[str] = set()
-    lines: list[str] = []
-    for t in outline:
-        slug = t.get("slug")
-        if not slug or slug in seen:
-            continue
-        seen.add(slug)
-        aliases = ", ".join(t.get("aliases") or [])
-        alias_part = f" (đồng nghĩa: {aliases})" if aliases else ""
-        lines.append(f"- {slug} — {t.get('title', slug)}{alias_part}")
-    for slug, title in existing_pages:
-        if slug in seen:
-            continue
-        seen.add(slug)
-        lines.append(f"- {slug} — {title}")
-    return "\n".join(lines)
-
-
-def _build_prompt(topic: dict, link_menu: str) -> str:
+def _build_prompt(topic: dict) -> str:
     hint = topic.get("hint") or ""
     return (
         f"Soạn một trang wiki cờ vua với tiêu đề: \"{topic['title']}\".\n"
         f"Phân mục kiến thức: {topic['kt_slug']}.\n"
         f"Gợi ý nội dung cần bao quát: {hint}\n\n"
-        "DANH SÁCH TRANG có thể liên kết (chỉ dùng slug bên trái cho [[...]]):\n"
-        f"{link_menu}\n\n"
         "Trả về DUY NHẤT nội dung Markdown của trang (không kèm giải thích ngoài lề)."
     )
 
@@ -126,17 +96,14 @@ async def _already_seeded(session, slug: str) -> bool:
 
 
 async def main() -> None:
-    # Outline precedence: argv path → curated glossary JSON → built-in default.
+    # Optional outline path from argv (first non-flag argument).
+    outline = DEFAULT_OUTLINE
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     if args:
         with open(args[0], encoding="utf-8") as fh:
             outline = json.load(fh)
         logger.info(f"Loaded {len(outline)} topics from {args[0]}")
-    elif DEFAULT_OUTLINE_PATH.exists():
-        outline = json.loads(DEFAULT_OUTLINE_PATH.read_text(encoding="utf-8"))
-        logger.info(f"Loaded {len(outline)} topics from {DEFAULT_OUTLINE_PATH}")
     else:
-        outline = DEFAULT_OUTLINE
         logger.info(f"Using built-in default outline ({len(outline)} topics)")
 
     async with async_session_factory() as session:
@@ -156,22 +123,6 @@ async def main() -> None:
             logger.error(f"No LLM provider configured ({e}). Set one in Settings first.")
             return
 
-        # Build the link "menu" + alias lookup once: outline slugs/aliases PLUS
-        # any chess wiki pages already published. The LLM is told to link only to
-        # these slugs; generated targets are then normalized + validated against
-        # this same set so a stray/aliased slug can't become a dead link.
-        family = await chess_service.chess_family_kt_slugs(session)
-        existing_rows = (await session.execute(
-            select(WikiPage.slug, WikiPage.title, WikiPage.aliases)
-            .where(WikiPage.knowledge_type_slugs.overlap(family))
-        )).all()
-        link_menu = _build_link_menu(outline, [(r.slug, r.title) for r in existing_rows])
-        alias_lookup = wiki_service.build_alias_lookup(
-            [(t["slug"], t.get("aliases") or []) for t in outline]
-            + [(r.slug, r.aliases or []) for r in existing_rows]
-        )
-        known_slugs = set(alias_lookup.values())
-
         created, skipped, failed = 0, 0, 0
         for topic in outline:
             slug = topic["slug"]
@@ -187,29 +138,17 @@ async def main() -> None:
 
             try:
                 content_md = await llm.generate(
-                    _build_prompt(topic, link_menu), system=SYSTEM_PROMPT,
+                    _build_prompt(topic), system=SYSTEM_PROMPT,
                     max_tokens=2000, temperature=0.4,
                 )
                 content_md = (content_md or "").strip()
                 if not content_md:
                     raise ValueError("LLM returned empty content")
 
-                # Resolve alias targets → canonical slugs, then report any link
-                # that still points outside the known set (likely an LLM-invented
-                # slug). We keep the page but flag it for the reviewer.
-                content_md = wiki_service.normalize_wikilink_targets(content_md, alias_lookup)
-                unknown = [
-                    t for t in wiki_service.extract_wikilinks(content_md)
-                    if t not in known_slugs and t != slug
-                ]
-                if unknown:
-                    logger.warning(f"[{slug}] {len(unknown)} unknown link target(s): {unknown}")
-
                 draft = await chess_service.propose_chess_wiki_page(
                     session, author,
                     slug=slug, title=topic["title"], content_md=content_md,
                     kt_slug=kt_slug, scope_type="global", scope_id=None,
-                    aliases=topic.get("aliases") or [],
                     note=f"Nháp do AI sinh từ giáo trình ({kt_slug}). Cần giáo viên rà soát.",
                 )
                 await session.commit()

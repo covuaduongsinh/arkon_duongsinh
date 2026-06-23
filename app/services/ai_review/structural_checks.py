@@ -8,7 +8,7 @@ import re
 import uuid
 from typing import Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import WikiPage
@@ -33,24 +33,13 @@ async def run(
     broken: list[str] = []
     if targets:
         # Same-scope OR global resolution: a wikilink resolves to the same
-        # scope first, then falls back to global. A target also resolves when it
-        # matches a page's VN/EN alias (e.g. "fork" → chien-thuat-nia-fork), so
-        # draft content authored with synonyms isn't flagged before normalization.
-        # Anything that hits none is broken.
+        # scope first, then falls back to global. Anything that hits neither
+        # is broken.
         rows = (await db.execute(
-            select(WikiPage.slug, WikiPage.aliases).where(
-                or_(WikiPage.slug.in_(targets), WikiPage.aliases.overlap(targets))
-            )
+            select(WikiPage.slug).where(WikiPage.slug.in_(targets))
         )).all()
-        valid: set[str] = set()
-        for slug, aliases in rows:
-            valid.add(slug.lower())
-            for alias in (aliases or []):
-                valid.add((alias or "").strip().lower())
-        broken = [
-            t for t in targets
-            if t.strip().lower() not in valid and t != self_slug
-        ]
+        existing = {r[0] for r in rows}
+        broken = [t for t in targets if t not in existing and t != self_slug]
     out.append({
         "id": "links.broken",
         "layer": "L2",

@@ -33,9 +33,6 @@ PAGE_TYPES = {"entity", "concept", "source", "topic", "index", "log", "hot"}
 
 # `[[slug]]` or `[[slug|display text]]` — captures the slug only.
 _WIKILINK_RE = re.compile(r"\[\[([^\]\|]+)(?:\|[^\]]*)?]]")
-# Same pattern but captures the target AND the optional display text — used by
-# normalize_wikilink_targets to rewrite alias targets while preserving the label.
-_WIKILINK_FULL_RE = re.compile(r"\[\[([^\]\|]+)(?:\|([^\]]*))?]]")
 
 
 # ---------------------------------------------------------------------------
@@ -154,75 +151,6 @@ async def refresh_links(
         .values([{"from_page_id": from_page_id, "to_slug": t} for t in targets])
         .on_conflict_do_nothing()
     )
-
-
-# ---------------------------------------------------------------------------
-# Alias resolution (VN/EN synonyms → canonical slug)
-# ---------------------------------------------------------------------------
-
-def build_alias_lookup(entries) -> dict[str, str]:
-    """Build a `{key_lower: canonical_slug}` map from `(slug, aliases)` pairs.
-
-    Every slug maps to itself, and every alias maps to its owning slug. Slugs
-    always win over aliases (two passes), and the first alias to claim a key
-    wins — so a clash between two pages' aliases resolves deterministically.
-    """
-    pairs = [(slug, list(aliases or [])) for slug, aliases in entries]
-    lookup: dict[str, str] = {}
-    for slug, _aliases in pairs:
-        if slug:
-            lookup[slug.lower()] = slug
-    for slug, aliases in pairs:
-        for alias in aliases:
-            key = (alias or "").strip().lower()
-            if key and key not in lookup:
-                lookup[key] = slug
-    return lookup
-
-
-def normalize_wikilink_targets(content_md: str, alias_lookup: dict[str, str]) -> str:
-    """Rewrite `[[target]]` / `[[target|disp]]` so the target is a canonical slug.
-
-    A target matching a slug or alias in `alias_lookup` is rewritten to the
-    canonical slug; the display label is preserved (when the alias had no
-    explicit display text, the original alias text becomes the label so the
-    rendered page reads the same). Unknown targets and targets already equal to
-    their canonical slug are left untouched.
-    """
-    if not content_md or not alias_lookup:
-        return content_md
-
-    def _sub(m: "re.Match[str]") -> str:
-        raw_target = m.group(1).strip()
-        disp = m.group(2)  # None when there is no `|display`
-        canonical = alias_lookup.get(raw_target.lower())
-        if not canonical or canonical == raw_target:
-            return m.group(0)
-        if disp is not None:
-            return f"[[{canonical}|{disp}]]"
-        return f"[[{canonical}|{raw_target}]]"
-
-    return _WIKILINK_FULL_RE.sub(_sub, content_md)
-
-
-async def build_alias_map(
-    session: AsyncSession,
-    scope_type: str = "global",
-    scope_id: Optional[uuid.UUID] = None,
-) -> dict[str, str]:
-    """`{alias_or_slug_lower: canonical_slug}` for pages in this scope + global.
-
-    Wikilinks resolve same-scope first, then global, so the alias map unions both
-    so normalization picks the right canonical slug regardless of where the alias
-    page lives.
-    """
-    where = _scope_filter(scope_type, scope_id)
-    if scope_type != "global" or scope_id is not None:
-        where = or_(where, and_(WikiPage.scope_type == "global", WikiPage.scope_id.is_(None)))
-    rows = (await session.execute(
-        select(WikiPage.slug, WikiPage.aliases).where(where)
-    )).all()
-    return build_alias_lookup([(r.slug, r.aliases or []) for r in rows])
 
 
 async def get_backlinks(
@@ -604,7 +532,6 @@ async def apply_create(
     scope_id: Optional[uuid.UUID] = None,
     status: str = "seed",
     create_revision: bool = True,
-    aliases: Optional[list[str]] = None,
 ) -> WikiPage:
     """Insert a new page in the given scope. Conflicts raise — caller should use update.
 
@@ -613,10 +540,6 @@ async def apply_create(
     (e.g. approve_draft tags it with reviewer context). This avoids inserting
     two revisions at (page_id, version=1), which violates uq_wiki_revisions_page_version.
     """
-    # Resolve any VN/EN alias targets to canonical slugs before storing, so the
-    # link graph and the rendered content both use real slugs.
-    alias_map = await build_alias_map(session, scope_type, scope_id)
-    content_md = normalize_wikilink_targets(content_md, alias_map)
     page = WikiPage(
         slug=slug,
         title=title,
@@ -625,7 +548,6 @@ async def apply_create(
         summary=summary,
         knowledge_type_slugs=list(knowledge_type_slugs or []),
         source_ids=list(source_ids or []),
-        aliases=list(aliases or []),
         # embedding intentionally omitted: stored in wiki_page_embeddings_<dim>
         scope_type=scope_type,
         scope_id=scope_id,
@@ -655,7 +577,6 @@ async def apply_update(
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
     status: Optional[str] = None,
-    set_aliases: Optional[list[str]] = None,
 ) -> Optional[WikiPage]:
     """
     Update an existing page atomically within the given scope:
@@ -664,7 +585,6 @@ async def apply_update(
       - Union add_knowledge_type_slug into knowledge_type_slugs.
       - Append add_source_id to source_ids if not present.
       - Optionally update lifecycle status.
-      - Optionally replace aliases (set_aliases).
       - Bump version, refresh updated_at, refresh embedding if supplied.
     Returns None if the page does not exist.
     """
@@ -672,11 +592,6 @@ async def apply_update(
     if page is None:
         return None
 
-    # Resolve VN/EN alias targets to canonical slugs before storing.
-    alias_map = await build_alias_map(session, scope_type, scope_id)
-    new_content_md = normalize_wikilink_targets(new_content_md, alias_map)
-    if set_aliases is not None:
-        page.aliases = list(set_aliases)
     page.content_md = new_content_md
     if title is not None:
         page.title = title
@@ -716,7 +631,6 @@ async def upsert_page(
     scope_type: str = "global",
     scope_id: Optional[uuid.UUID] = None,
     status: Optional[str] = None,
-    aliases: Optional[list[str]] = None,
 ) -> WikiPage:
     """Create-or-update by slug within a scope."""
     # Acquire a transaction-level advisory lock based on the hash of the slug
@@ -731,7 +645,6 @@ async def upsert_page(
             knowledge_type_slugs, source_ids, embedding,
             scope_type=scope_type, scope_id=scope_id,
             status=status or "seed",
-            aliases=aliases,
         )
     return await apply_update(
         session,
@@ -744,7 +657,6 @@ async def upsert_page(
         embedding=embedding,
         scope_type=scope_type, scope_id=scope_id,
         status=status,
-        set_aliases=aliases,
     ) or existing
 
 
@@ -1080,7 +992,6 @@ async def approve_draft(
             if overrides.get("final_knowledge_type_slugs") is not None
             else meta.get("knowledge_type_slugs") or []
         )
-        aliases = meta.get("aliases") or []
         scope_type = meta.get("scope_type") or "global"
         scope_id_raw = meta.get("scope_id")
         try:
@@ -1107,7 +1018,6 @@ async def approve_draft(
             content_md=final_content, summary="",
             knowledge_type_slugs=list(kt_slugs), source_ids=[],
             scope_type=scope_type, scope_id=scope_id,
-            aliases=list(aliases) if aliases else None,
             # apply_create's auto-revision and this tagged revision would both
             # land at version=1, colliding on uq_wiki_revisions_page_version.
             # Suppress the generic one and record a single reviewer-tagged v1.
@@ -1139,8 +1049,6 @@ async def approve_draft(
         ):
             raise DraftConflictError(page.version, draft.base_version)
 
-        alias_map = await build_alias_map(session, page.scope_type or "global", page.scope_id)
-        final_content = normalize_wikilink_targets(final_content, alias_map)
         page.content_md = final_content
         page.version = (page.version or 1) + 1
         await session.flush()
@@ -1190,8 +1098,6 @@ async def direct_edit_page(
     Sync write by an editor/admin — no review step.
     Creates a revision immediately.
     """
-    alias_map = await build_alias_map(session, page.scope_type or "global", page.scope_id)
-    content_md = normalize_wikilink_targets(content_md, alias_map)
     page.content_md = content_md
     page.version = (page.version or 1) + 1
     await session.flush()
@@ -1402,15 +1308,12 @@ async def lint_wiki(
       - Contradiction nodes: pages containing '[!contradiction]' callouts.
     """
     # 1. Fetch all pages in the current scope
-    pages_stmt = select(
-        WikiPage.slug, WikiPage.title, WikiPage.id, WikiPage.status, WikiPage.aliases
-    ).where(_scope_filter(scope_type, scope_id))
+    pages_stmt = select(WikiPage.slug, WikiPage.title, WikiPage.id, WikiPage.status).where(
+        _scope_filter(scope_type, scope_id)
+    )
     pages_rows = (await session.execute(pages_stmt)).all()
     all_slugs = {r.slug for r in pages_rows}
     slug_to_title = {r.slug: r.title for r in pages_rows}
-    # Alias → canonical slug, so a `[[fork]]` link that hasn't been normalized
-    # still resolves to chien-thuat-nia-fork instead of being flagged dead.
-    alias_lookup = build_alias_lookup([(r.slug, r.aliases or []) for r in pages_rows])
 
     # 2. Fetch all links in this scope
     page_ids = [r.id for r in pages_rows]
@@ -1429,23 +1332,20 @@ async def lint_wiki(
         if not from_slug:
             continue
         
-        # Resolve aliases to the canonical slug before checking existence so the
-        # backlink count is credited to the real page.
-        resolved = alias_lookup.get(to_slug.lower(), to_slug)
-        is_exist = (resolved in all_slugs)
-
+        is_exist = (to_slug in all_slugs)
+        
         if not is_exist:
             # Check global scope as fallback
             if scope_type != "global":
                 global_exists = (await session.execute(
-                    select(WikiPage.id).where(WikiPage.slug == resolved, WikiPage.scope_type == "global", WikiPage.scope_id.is_(None))
+                    select(WikiPage.id).where(WikiPage.slug == to_slug, WikiPage.scope_type == "global", WikiPage.scope_id.is_(None))
                 )).scalar_one_or_none()
                 if global_exists:
                     is_exist = True
 
         if is_exist:
-            if resolved in backlink_counts:
-                backlink_counts[resolved] += 1
+            if to_slug in backlink_counts:
+                backlink_counts[to_slug] += 1
         else:
             if to_slug not in (INDEX_SLUG, LOG_SLUG, HOT_SLUG):
                 dead_links.append({

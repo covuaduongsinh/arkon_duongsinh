@@ -311,12 +311,6 @@ class WikiPage(Base):
     source_ids: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(UUID(as_uuid=True)), nullable=False, default=list,
     )
-    # VN/EN synonyms that resolve to this page's slug when used as a `[[wikilink]]`
-    # target (e.g. "fork"/"nĩa" → chien-thuat-nia-fork). Targets are rewritten to
-    # the canonical slug at upsert time — see wiki_service.normalize_wikilink_targets.
-    aliases: Mapped[list[str]] = mapped_column(
-        ARRAY(String), nullable=False, default=list,
-    )
     # Embeddings live in per-dimension tables (wiki_page_embeddings_<dim>) so
     # different embedding models with different output sizes can coexist.
     # See app/ai/embedding_catalog.py and migration 015.
@@ -1725,29 +1719,6 @@ class ChessLesson(Base):
     )
 
     __table_args__ = (Index("ix_chess_lessons_class", "class_id", "position"),)
-
-
-class ChessLessonLink(Base):
-    """
-    Derived edge from a chess lesson to a wiki page slug, parsed from `[[slug]]`
-    patterns in the lesson's content_md. Mirrors WikiLink but originates from a
-    lesson (not a wiki page), so a concept page can surface "which lessons use
-    me". Refreshed on lesson create/update by chess_service.refresh_lesson_links().
-    """
-    __tablename__ = "chess_lesson_links"
-
-    lesson_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("chess_lessons.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    to_slug: Mapped[str] = mapped_column(String(300), nullable=False)
-
-    __table_args__ = (
-        PrimaryKeyConstraint("lesson_id", "to_slug"),
-        Index("ix_chess_lesson_links_lesson_id", "lesson_id"),
-        Index("ix_chess_lesson_links_to_slug", "to_slug"),
-    )
 
 
 class ChessAssignment(Base):
