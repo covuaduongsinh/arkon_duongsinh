@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { WikiInsertPicker } from "@/components/chess/wiki-insert-picker";
 
 type Member = { employee_id: string; name: string; role: string };
 type ClassDetail = {
@@ -51,6 +52,7 @@ export default function ClassDetailPage() {
   // lesson creation
   const [lTitle, setLTitle] = useState("");
   const [lContent, setLContent] = useState("");
+  const [wikiPickerOpen, setWikiPickerOpen] = useState(false);
   // assignment progress popover
   const [progRows, setProgRows] = useState<Record<string, ProgressRow[]>>({});
   const [error, setError] = useState<string | null>(null);
@@ -265,7 +267,13 @@ export default function ClassDetailPage() {
           <div className="mb-3 space-y-2 rounded-md border border-black/10 p-3">
             <Input value={lTitle} onChange={(e) => setLTitle(e.target.value)} placeholder="Tiêu đề bài giảng" />
             <Textarea value={lContent} onChange={(e) => setLContent(e.target.value)} rows={4} placeholder="Nội dung (Markdown, có thể nhúng ```pgn / ```fen)" className="font-mono text-xs" />
-            <Button size="sm" onClick={createLesson} disabled={!lTitle.trim()}>Thêm bài giảng</Button>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={createLesson} disabled={!lTitle.trim()}>Thêm bài giảng</Button>
+              <Button size="sm" variant="outline" onClick={() => setWikiPickerOpen(true)} className="gap-1.5">
+                <span className="material-symbols-outlined text-sm">menu_book</span>
+                Chèn từ Wiki
+              </Button>
+            </div>
           </div>
         )}
         {lessons.length === 0 ? (
@@ -282,6 +290,12 @@ export default function ClassDetailPage() {
       </section>
 
       <Link href="/chess/classes" className="text-sm text-muted-foreground hover:text-foreground">← Về Lớp học</Link>
+
+      <WikiInsertPicker
+        open={wikiPickerOpen}
+        onOpenChange={setWikiPickerOpen}
+        onInsert={(md) => setLContent((prev) => (prev ? `${prev.replace(/\s+$/, "")}\n${md}` : md.replace(/^\s+/, "")))}
+      />
     </>
   );
 }

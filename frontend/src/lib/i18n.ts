@@ -18,6 +18,7 @@ const vi: Dict = {
   "Reviews": "Duyệt bài",
   "AI Skills": "Kỹ năng AI",
   "Chess": "Cờ vua",
+  "Chess Wiki": "Wiki Cờ vua",
   "Organization": "Tổ chức",
   "Departments": "Phòng ban",
   "Employees": "Nhân sự",
@@ -131,6 +132,17 @@ const vi: Dict = {
   "No items yet.": "Chưa có mục nào.",
   "Open game →": "Mở ván →",
   "Back to Study sets": "← Về Bộ học liệu",
+
+  // ── Chess Wiki (specialized knowledge base) ──
+  "Specialized chess knowledge for teachers — openings, tactics, endgames, strategy and model games.":
+    "Kiến thức cờ vua chuyên ngành cho giáo viên — khai cuộc, chiến thuật, tàn cuộc, chiến lược và ván mẫu.",
+  "New page": "Trang mới",
+  "Propose page": "Đề xuất trang",
+  "Search the chess wiki…": "Tìm trong Wiki Cờ vua…",
+  "No chess wiki pages yet": "Chưa có trang wiki cờ vua nào",
+  "Create a page or publish a lesson to the wiki to start building chess knowledge.":
+    "Tạo trang mới hoặc xuất bản bài giảng lên wiki để bắt đầu xây dựng kho kiến thức cờ vua.",
+  "No pages match your search.": "Không có trang nào khớp tìm kiếm.",
 };
 
 const dicts: Record<string, Dict> = { vi };

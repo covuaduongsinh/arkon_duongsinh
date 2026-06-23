@@ -96,6 +96,15 @@ ROLE_PERMISSIONS_MAP: dict[str, list[str]] = {
         "chess:read:own_dept", "chess:create:own_dept", "chess:play",
         "org:departments:read", "org:employees:read",
     ],
+    # Chess teachers (giáo viên): author chess wiki knowledge and build/teach
+    # lessons within their cohort department. Wiki + chess write scoped to
+    # own_dept, plus coaching (manage classes, study sets, publish puzzles).
+    "teacher": [
+        "wiki:read:own_dept", "wiki:write:own_dept",
+        "chess:read:own_dept", "chess:create:own_dept", "chess:edit:own_dept",
+        "chess:play", "chess:coach",
+        "org:departments:read", "org:employees:read",
+    ],
     "knowledge_manager": [
         "doc:read:all", "doc:create:all", "doc:edit:all", "doc:delete:all",
         "wiki:read:all", "wiki:write:all", "wiki:delete:all",
@@ -312,6 +321,11 @@ ROLE_PRESETS: dict[str, dict] = {
             "wiki:read:all", "wiki:write:all", "wiki:delete:all",
             "skill:read:all", "skill:create:all", "skill:edit:all", "skill:delete:all",
         ],
+        "is_system": True,
+    },
+    "Teacher / Giáo viên": {
+        "description": "Chess teacher — author chess wiki pages and build/teach lessons in own department",
+        "permissions": ROLE_PERMISSIONS_MAP["teacher"],
         "is_system": True,
     },
 }

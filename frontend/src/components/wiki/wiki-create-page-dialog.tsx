@@ -35,6 +35,12 @@ type Props = {
   getCreateModeForScope?: (scope: { scope_type: string; scope_id: string | null }) => Mode | null;
   /** Optional initial title — used when opening from a knowledge-gap suggestion. */
   defaultTitle?: string;
+  /** When provided, render a knowledge-type picker (e.g. chess sub-topics) and
+   *  tag the new page/draft with the selected slug. Omit for the plain flow
+   *  that creates untagged pages. */
+  knowledgeTypeOptions?: { slug: string; label: string }[];
+  /** Pre-selected knowledge type when `knowledgeTypeOptions` is provided. */
+  defaultKnowledgeTypeSlug?: string;
 };
 
 function slugify(s: string): string {
@@ -55,6 +61,8 @@ export function WikiCreatePageDialog({
   scopes,
   getCreateModeForScope,
   defaultTitle = "",
+  knowledgeTypeOptions,
+  defaultKnowledgeTypeSlug,
 }: Props) {
   const router = useRouter();
   const [title, setTitle] = React.useState(defaultTitle);
@@ -65,8 +73,16 @@ export function WikiCreatePageDialog({
   );
   const [content, setContent] = React.useState("");
   const [note, setNote] = React.useState("");
+  const [ktSlug, setKtSlug] = React.useState(
+    defaultKnowledgeTypeSlug ?? knowledgeTypeOptions?.[0]?.slug ?? "",
+  );
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  // The knowledge types tagged on the new page/draft. When a picker is shown
+  // we tag the selected slug so the page surfaces under that family (e.g. the
+  // Chess Wiki, which filters by knowledge_family=chess).
+  const knowledgeTypeSlugs = knowledgeTypeOptions ? (ktSlug ? [ktSlug] : []) : [];
 
   // Restrict the scope dropdown to scopes the user can actually write to.
   // Without this filter a user with wiki:write:own_dept (and wiki:read:all)
@@ -104,8 +120,12 @@ export function WikiCreatePageDialog({
     setScopeKey(`${defaultScope.scope_type}:${defaultScope.scope_id ?? ""}`);
     setContent("");
     setNote("");
+    setKtSlug(defaultKnowledgeTypeSlug ?? knowledgeTypeOptions?.[0]?.slug ?? "");
     setError(null);
-  }, [open, defaultScope, defaultTitle]);
+    // knowledgeTypeOptions is a stable config array from the parent; excluded
+    // from deps to avoid resetting on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, defaultScope, defaultTitle, defaultKnowledgeTypeSlug]);
 
   const submit = async () => {
     if (!title.trim() || !slug.trim() || !content.trim()) {
@@ -128,7 +148,7 @@ export function WikiCreatePageDialog({
             content_md: content,
             scope_type,
             scope_id,
-            knowledge_type_slugs: [],
+            knowledge_type_slugs: knowledgeTypeSlugs,
           },
         });
         onOpenChange(false);
@@ -147,7 +167,7 @@ export function WikiCreatePageDialog({
             content_md: content,
             scope_type,
             scope_id,
-            knowledge_type_slugs: [],
+            knowledge_type_slugs: knowledgeTypeSlugs,
             note: note || null,
           },
         });
@@ -206,6 +226,24 @@ export function WikiCreatePageDialog({
               className="font-mono text-sm"
             />
           </div>
+
+          {knowledgeTypeOptions && knowledgeTypeOptions.length > 0 && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="cp-kt">Phân mục</Label>
+              <select
+                id="cp-kt"
+                value={ktSlug}
+                onChange={(e) => setKtSlug(e.target.value)}
+                className="h-9 rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                {knowledgeTypeOptions.map((o) => (
+                  <option key={o.slug} value={o.slug}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="grid gap-1.5">
             <Label htmlFor="cp-scope">Scope</Label>

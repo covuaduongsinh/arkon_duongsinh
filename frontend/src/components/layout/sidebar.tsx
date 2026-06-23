@@ -58,6 +58,7 @@ const navSections: NavSection[] = [
       { label: "Puzzles", href: "/chess/puzzles", icon: "extension", requiredPermissions: ["chess:read:own_dept", "chess:read:all", "chess:play"] },
       { label: "Play", href: "/chess/play", icon: "swords", requiredPermissions: ["chess:play"] },
       { label: "Positions", href: "/chess/positions", icon: "grid_on", requiredPermissions: ["chess:read:own_dept", "chess:read:all"] },
+      { label: "Chess Wiki", href: "/chess/wiki", icon: "menu_book", requiredPermissions: ["chess:read:own_dept", "chess:read:all"] },
       { label: "Study sets", href: "/chess/study", icon: "library_books", requiredPermissions: ["chess:read:own_dept", "chess:read:all"] },
       { label: "Classes", href: "/chess/classes", icon: "school", requiredPermissions: ["chess:read:own_dept", "chess:read:all", "chess:play"] },
     ],

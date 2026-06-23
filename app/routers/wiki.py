@@ -203,6 +203,7 @@ def _build_wiki_scope_filter(user: Employee):
 async def list_wiki_pages(
     page_type: Optional[str] = Query(None),
     knowledge_type_slug: Optional[str] = Query(None),
+    knowledge_family: Optional[str] = Query(None, description="Filter to a knowledge-type family, e.g. 'chess' (matches any chess-* slug)"),
     scope_type: Optional[str] = Query(None, description="Filter to a specific scope: global, department, or project"),
     scope_id: Optional[str] = Query(None, description="UUID of the scope (required for department/project)"),
     limit: int = Query(50, ge=1, le=500),
@@ -255,6 +256,14 @@ async def list_wiki_pages(
         stmt = stmt.where(WikiPage.page_type == page_type)
     if knowledge_type_slug:
         stmt = stmt.where(WikiPage.knowledge_type_slugs.any(knowledge_type_slug))  # type: ignore[arg-type]
+    if knowledge_family == "chess":
+        # Chess wiki: match any page tagged with a chess-family slug
+        # (chess, chess-opening, chess-tactics, chess-endgame, chess-strategy,
+        # chess-game). Reuses the same taxonomy that scopes search_wiki.
+        from app.services import chess_service
+
+        family = await chess_service.chess_family_kt_slugs(db)
+        stmt = stmt.where(WikiPage.knowledge_type_slugs.overlap(family))  # type: ignore[attr-defined]
 
     rows = (await db.execute(stmt)).all()
     return [_summary(r.WikiPage, scope_name=r.scope_name) for r in rows]

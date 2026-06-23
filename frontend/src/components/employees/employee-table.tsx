@@ -209,7 +209,7 @@ export function EmployeeTable({
                       variant={emp.global_role === "admin" ? "default" : emp.global_role === "knowledge_manager" ? "outline" : "secondary"}
                       className="text-[10px] capitalize h-5 px-2 font-medium"
                     >
-                      {emp.global_role === "admin" ? "System Admin" : emp.global_role === "knowledge_manager" ? "Knowledge Manager" : emp.global_role === "contributor" ? "Contributor" : "Viewer"}
+                      {emp.global_role === "admin" ? "System Admin" : emp.global_role === "knowledge_manager" ? "Knowledge Manager" : emp.global_role === "teacher" ? "Teacher" : emp.global_role === "contributor" ? "Contributor" : emp.global_role === "student" ? "Student" : "Viewer"}
                     </Badge>
                   </TableCell>
                   <TableCell>

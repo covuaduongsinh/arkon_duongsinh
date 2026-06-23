@@ -39,6 +39,7 @@ export default function EmployeesPage() {
   const roles = [
     { id: "viewer", name: "Viewer" },
     { id: "contributor", name: "Contributor" },
+    { id: "teacher", name: "Teacher / Giáo viên" },
     { id: "knowledge_manager", name: "Knowledge Manager" },
     { id: "admin", name: "System Admin" }
   ];

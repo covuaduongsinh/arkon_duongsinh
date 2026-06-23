@@ -49,7 +49,7 @@ class EmployeeCreate(BaseModel):
     email: str
     password: Optional[str] = None  # Optional on update
     role: str = "employee"  # "admin" or "employee"
-    global_role: str = "viewer"  # "viewer", "contributor", "knowledge_manager", "admin"
+    global_role: str = "viewer"  # "viewer", "contributor", "teacher", "knowledge_manager", "admin"
     # All departments the employee belongs to. Empty list is allowed — such a
     # user can only see resources scoped to 'global'.
     department_ids: list[str] = []
@@ -231,8 +231,8 @@ async def create_employee(
         raise HTTPException(400, "Password must be at least 8 characters")
     if body.role not in ("admin", "employee"):
         raise HTTPException(400, "Role must be 'admin' or 'employee'")
-    if body.global_role not in ("viewer", "contributor", "knowledge_manager", "admin"):
-        raise HTTPException(400, "Global role must be one of: viewer, contributor, knowledge_manager, admin")
+    if body.global_role not in ("viewer", "contributor", "teacher", "knowledge_manager", "admin"):
+        raise HTTPException(400, "Global role must be one of: viewer, contributor, teacher, knowledge_manager, admin")
 
     dept_uuids = [uuid.UUID(d) for d in body.department_ids]
     if dept_uuids:
@@ -271,8 +271,8 @@ async def update_employee(
     emp = await db.get(Employee, uuid.UUID(emp_id))
     if not emp:
         raise HTTPException(404, "Employee not found")
-    if body.global_role not in ("viewer", "contributor", "knowledge_manager", "admin"):
-        raise HTTPException(400, "Global role must be one of: viewer, contributor, knowledge_manager, admin")
+    if body.global_role not in ("viewer", "contributor", "teacher", "knowledge_manager", "admin"):
+        raise HTTPException(400, "Global role must be one of: viewer, contributor, teacher, knowledge_manager, admin")
     emp.name = body.name
     emp.email = body.email
     emp.role = body.role
