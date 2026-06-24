@@ -63,11 +63,16 @@ export default function ChessPuzzlesPage() {
   const [sort, setSort] = useState("recent");
   const [includeDrafts, setIncludeDrafts] = useState(false);
 
+  // Coach review: multi-select + per-card publish/hide.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   const opts = { search, themes: activeThemes, side, source, opening, ratingBand, pieceBand, sort, includeDrafts };
 
   const load = useCallback(
     async (p: number, o: typeof opts) => {
       setLoading(true);
+      setSelected(new Set()); // selection is per-result-set
       try {
         const params = new URLSearchParams({
           page: String(p), page_size: String(PAGE_SIZE), sort: o.sort,
@@ -110,6 +115,43 @@ export default function ChessPuzzlesPage() {
 
   function toggleTheme(th: string) {
     setActiveThemes((prev) => (prev.includes(th) ? prev.filter((x) => x !== th) : [...prev, th]));
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Per-card publish/hide — uses the single-puzzle PATCH and updates in place.
+  async function togglePublishOne(p: ChessPuzzle) {
+    try {
+      await api(`/api/chess/puzzles/${p.id}`, {
+        method: "PATCH",
+        body: { is_published: !p.is_published },
+      });
+      setPuzzles((prev) => prev.map((x) => (x.id === p.id ? { ...x, is_published: !x.is_published } : x)));
+    } catch {
+      /* leave state unchanged on failure */
+    }
+  }
+
+  // Bulk publish/hide the selected puzzles, then refresh the current page.
+  async function bulkPublish(publish: boolean) {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    try {
+      await api("/api/chess/puzzles/bulk-publish", { method: "POST", body: { ids, publish } });
+      await load(page, opts);
+    } catch {
+      /* ignore — list reload reflects whatever changed */
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   return (
@@ -181,6 +223,32 @@ export default function ChessPuzzlesPage() {
         </div>
       </div>
 
+      {/* Coach bulk-review toolbar */}
+      {canCoach && puzzles.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-black/10 bg-muted/40 px-3 py-2 text-sm">
+          <span className="text-muted-foreground">Đã chọn {selected.size}</span>
+          <button
+            onClick={() => setSelected(new Set(puzzles.map((p) => p.id)))}
+            className="text-primary hover:underline"
+          >
+            Chọn tất cả (trang này)
+          </button>
+          {selected.size > 0 && (
+            <button onClick={() => setSelected(new Set())} className="text-muted-foreground hover:underline">
+              Bỏ chọn
+            </button>
+          )}
+          <div className="ml-auto flex gap-2">
+            <Button size="sm" disabled={selected.size === 0 || bulkBusy} onClick={() => bulkPublish(true)}>
+              Xuất bản đã chọn
+            </Button>
+            <Button size="sm" variant="outline" disabled={selected.size === 0 || bulkBusy} onClick={() => bulkPublish(false)}>
+              Ẩn đã chọn
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Theme facet chips */}
       {facets && facets.themes.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -214,7 +282,17 @@ export default function ChessPuzzlesPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {puzzles.map((p) => (
-            <div key={p.id} className="rounded-lg border border-black/10 bg-card p-3">
+            <div key={p.id} className="relative rounded-lg border border-black/10 bg-card p-3">
+              {canCoach && (
+                <label className="absolute left-4 top-4 z-10 flex h-6 w-6 cursor-pointer items-center justify-center rounded bg-white/90 shadow-sm ring-1 ring-black/10">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(p.id)}
+                    onChange={() => toggleSelect(p.id)}
+                    aria-label="Chọn bài tập"
+                  />
+                </label>
+              )}
               <ChessBoard fen={p.fen} orientation={p.side_to_move === "b" ? "black" : "white"} interactive={false} className="max-w-full" />
               <div className="mt-2 flex items-center justify-between gap-2">
                 <Link href={`/chess/puzzles/${p.id}`} className="truncate text-sm font-medium hover:text-primary hover:underline">
@@ -240,6 +318,16 @@ export default function ChessPuzzlesPage() {
               </div>
               {p.opening_name && (
                 <p className="mt-1 truncate text-[11px] text-muted-foreground">{p.opening_name}</p>
+              )}
+              {canCoach && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 w-full"
+                  onClick={() => togglePublishOne(p)}
+                >
+                  {p.is_published ? "Ẩn (về nháp)" : "Xuất bản"}
+                </Button>
               )}
             </div>
           ))}

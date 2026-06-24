@@ -196,6 +196,44 @@ async def create_puzzle(
     return PuzzleWithSolution(**_public(puzzle).model_dump(), solution_moves=puzzle.solution_moves)
 
 
+class BulkPublishBody(BaseModel):
+    ids: list[uuid.UUID]
+    publish: bool = True
+
+
+@router.post("/chess/puzzles/bulk-publish")
+async def bulk_publish_puzzles(
+    body: BulkPublishBody,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:coach"),
+):
+    """Publish/unpublish many puzzles at once (coach action). Declared before the
+    dynamic "/chess/puzzles/{puzzle_id}" route so the literal path wins."""
+    if not body.ids:
+        return {"updated": 0, "skipped": 0}
+    if len(body.ids) > 500:
+        raise HTTPException(400, "Tối đa 500 bài mỗi lần")
+
+    puzzles = (await db.execute(
+        select(ChessPuzzle).where(ChessPuzzle.id.in_(body.ids))
+    )).scalars().all()
+
+    updated = skipped = 0
+    for p in puzzles:
+        if not can_access_chess(user, p, "edit"):
+            skipped += 1
+            continue
+        if p.is_published != body.publish:
+            p.is_published = body.publish
+            await log_audit(
+                db, user, "publish" if body.publish else "unpublish",
+                "chess_puzzle", str(p.id),
+            )
+            updated += 1
+    await db.commit()
+    return {"updated": updated, "skipped": skipped}
+
+
 # ---------------------------------------------------------------------------
 # Lichess puzzle-DB import (coach-only). These literal routes MUST be declared
 # before the dynamic "/chess/puzzles/{puzzle_id}" route, otherwise a GET to
