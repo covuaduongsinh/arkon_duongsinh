@@ -23,6 +23,7 @@ router = APIRouter()
 
 class ChessGameSummary(BaseModel):
     id: uuid.UUID
+    slug: Optional[str] = None
     white: Optional[str] = None
     black: Optional[str] = None
     result: Optional[str] = None
@@ -52,7 +53,7 @@ class ChessGameDetail(ChessGameSummary):
 
 def _summary(g: ChessGame) -> ChessGameSummary:
     return ChessGameSummary(
-        id=g.id, white=g.white, black=g.black, result=g.result, eco=g.eco,
+        id=g.id, slug=g.slug, white=g.white, black=g.black, result=g.result, eco=g.eco,
         opening_name=g.opening_name, white_elo=g.white_elo, black_elo=g.black_elo,
         event=g.event, played_at=g.played_at, ply_count=g.ply_count,
         source_game=g.source_game, scope_type=g.scope_type, scope_id=g.scope_id,

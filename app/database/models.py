@@ -1355,6 +1355,9 @@ class ChessGame(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     pgn: Mapped[str] = mapped_column(Text, nullable=False)
+    # Human-readable, stable handle for `[[game:<slug>]]` wikilinks. Unique per
+    # scope; auto-generated from the players/event/year (see chess_service).
+    slug: Mapped[Optional[str]] = mapped_column(String(120))
     headers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # Denormalized PGN seven-tag-roster + ratings for search/listing.
     white: Mapped[Optional[str]] = mapped_column(String(200))
@@ -1410,6 +1413,7 @@ class ChessGame(Base):
         Index("ix_chess_games_scope", "scope_type", "scope_id"),
         Index("ix_chess_games_eco", "eco"),
         Index("ix_chess_games_result", "result"),
+        UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_games_scope_slug"),
     )
 
 
@@ -1421,6 +1425,8 @@ class ChessPuzzle(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     fen: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Human-readable handle for `[[puzzle:<slug>]]` wikilinks. Unique per scope.
+    slug: Mapped[Optional[str]] = mapped_column(String(120))
     # Expected solution moves in UCI (e.g. ["e2e4", "e7e5"]). The mover to start
     # is whoever is to move in `fen`.
     solution_moves: Mapped[list[str]] = mapped_column(
@@ -1457,6 +1463,7 @@ class ChessPuzzle(Base):
         Index("ix_chess_puzzles_scope", "scope_type", "scope_id"),
         Index("ix_chess_puzzles_rating", "rating"),
         Index("ix_chess_puzzles_published", "is_published"),
+        UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_puzzles_scope_slug"),
     )
 
 
@@ -1499,6 +1506,8 @@ class ChessPosition(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     fen: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Human-readable handle for `[[position:<slug>]]` wikilinks. Unique per scope.
+    slug: Mapped[Optional[str]] = mapped_column(String(120))
     label: Mapped[Optional[str]] = mapped_column(String(300))
     description: Mapped[Optional[str]] = mapped_column(Text)
     # Cached engine evaluation (centipawns from White's POV) — filled by the
@@ -1522,6 +1531,7 @@ class ChessPosition(Base):
 
     __table_args__ = (
         UniqueConstraint("scope_type", "scope_id", "fen", name="uq_chess_positions_scope_fen"),
+        UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_positions_scope_slug"),
         Index("ix_chess_positions_scope", "scope_type", "scope_id"),
     )
 
@@ -1535,6 +1545,9 @@ class ChessStudySet(Base):
     )
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
+    # Human-readable handle for `[[study:<slug>]]` wikilinks (distinct from
+    # `wiki_slug`, which points at a companion wiki page). Unique per scope.
+    slug: Mapped[Optional[str]] = mapped_column(String(120))
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="mixed")  # opening|tactics|endgame|mixed
     # Optional companion wiki page (theory written through the MRP/wiki pipeline).
     wiki_slug: Mapped[Optional[str]] = mapped_column(String(300))
@@ -1563,6 +1576,7 @@ class ChessStudySet(Base):
 
     __table_args__ = (
         Index("ix_chess_study_sets_scope", "scope_type", "scope_id"),
+        UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_study_sets_scope_slug"),
     )
 
 

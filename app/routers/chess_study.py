@@ -29,6 +29,7 @@ def _require_coach(user: Employee) -> None:
 
 class StudySetSummary(BaseModel):
     id: uuid.UUID
+    slug: Optional[str] = None
     title: str
     description: Optional[str] = None
     kind: str
@@ -76,7 +77,7 @@ class AddItemBody(BaseModel):
 
 def _summary(s: ChessStudySet) -> StudySetSummary:
     return StudySetSummary(
-        id=s.id, title=s.title, description=s.description, kind=s.kind,
+        id=s.id, slug=s.slug, title=s.title, description=s.description, kind=s.kind,
         wiki_slug=s.wiki_slug, scope_type=s.scope_type, scope_id=s.scope_id,
         created_at=s.created_at.isoformat(),
     )

@@ -2,10 +2,38 @@
 
 import React from "react";
 import { WikiContent } from "./wiki-content";
-import { WikilinkAutocomplete } from "./wikilink-autocomplete";
+import { WikilinkAutocomplete, type LinkSuggestion } from "./wikilink-autocomplete";
+import { wikiTypeColor, wikiTypeIcon } from "./wiki-type-badge";
 import { getTextareaCaretCoords, type CaretCoords } from "@/lib/textarea-caret";
 import { api } from "@/lib/api";
 import { WikiPageSummary } from "@/types/wiki";
+import {
+  CHESS_LINK_ICON,
+  CHESS_LINK_LABEL,
+  type ChessLinkType,
+} from "@/lib/hooks/use-chess-resolver";
+
+type ChessTarget = {
+  token: string;
+  type: ChessLinkType;
+  title: string;
+  subtitle?: string | null;
+};
+
+const CHESS_NS_RE = /^(game|position|puzzle|study):(.*)$/;
+
+/** Client-side relevance score for a wiki page against the typed query. */
+function scoreWikiPage(page: WikiPageSummary, q: string): number {
+  if (!q) return 0;
+  const ql = q.toLowerCase();
+  const slug = page.slug.toLowerCase();
+  const title = page.title.toLowerCase();
+  const aliases = (page.aliases ?? []).map((a) => a.toLowerCase());
+  if (slug === ql || title === ql || aliases.includes(ql)) return 100;
+  if (slug.startsWith(ql) || title.startsWith(ql) || aliases.some((a) => a.startsWith(ql))) return 50;
+  if (slug.includes(ql) || title.includes(ql) || aliases.some((a) => a.includes(ql))) return 20;
+  return -1;
+}
 
 // ---------------------------------------------------------------------------
 // Toolbar helpers — operate on a controlled textarea + value pair.
@@ -144,6 +172,7 @@ export function MarkdownEditor({
   const [link, setLink] = React.useState<LinkContext | null>(null);
   const [coords, setCoords] = React.useState<CaretCoords | null>(null);
   const [pages, setPages] = React.useState<WikiPageSummary[]>([]);
+  const [chessTargets, setChessTargets] = React.useState<ChessTarget[]>([]);
 
   // Load page pool once when the editor first mounts. The endpoint already
   // filters by user scope via RBAC, so we never see pages the user can't link
@@ -162,6 +191,78 @@ export function MarkdownEditor({
     };
   }, []);
 
+  // Chess entities are searched server-side (potentially many games) as the
+  // user types. A `game:` / `position:` … prefix scopes the search to one type.
+  const linkQuery = link?.query ?? null;
+  React.useEffect(() => {
+    if (linkQuery === null) return;
+    const q = linkQuery.trim();
+    const ns = q.match(CHESS_NS_RE);
+    const params = new URLSearchParams({ limit: "8" });
+    const search = ns ? ns[2] : q;
+    if (search) params.set("q", search);
+    if (ns) params.set("type", ns[1]);
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      api<{ items: ChessTarget[] }>(`/api/chess/link-targets?${params.toString()}`)
+        .then((r) => {
+          if (!cancelled) setChessTargets(Array.isArray(r.items) ? r.items : []);
+        })
+        .catch(() => {
+          if (!cancelled) setChessTargets([]);
+        });
+    }, 180);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [linkQuery]);
+
+  // Merge wiki-page + chess suggestions into the unified picker list. Typing a
+  // chess namespace prefix (`game:` …) hides wiki pages so the user sees only
+  // the matching chess entities.
+  const suggestions: LinkSuggestion[] = React.useMemo(() => {
+    if (link === null) return [];
+    const q = link.query.trim();
+    const nsPrefix = CHESS_NS_RE.test(q);
+
+    const wiki: LinkSuggestion[] = nsPrefix
+      ? []
+      : (q
+          ? pages
+              .map((p) => ({ p, s: scoreWikiPage(p, q) }))
+              .filter((x) => x.s >= 0)
+              .sort((a, b) => b.s - a.s)
+              .map((x) => x.p)
+          : pages
+        )
+          .slice(0, 8)
+          .map((p) => ({
+            kind: "wiki" as const,
+            insert: p.slug,
+            title: p.title,
+            subtitle:
+              p.scope_type && p.scope_type !== "global" && p.scope_name
+                ? `${p.slug} · ${p.scope_name}`
+                : p.slug,
+            icon: wikiTypeIcon(p.page_type),
+            iconColor: wikiTypeColor(p.page_type),
+            key: `wiki:${p.slug}:${p.scope_type}:${p.scope_id ?? ""}`,
+          }));
+
+    const chess: LinkSuggestion[] = chessTargets.map((t) => ({
+      kind: "chess" as const,
+      insert: t.token,
+      title: t.title,
+      subtitle: `${CHESS_LINK_LABEL[t.type] ?? "Cờ vua"}${t.subtitle ? ` · ${t.subtitle}` : ""}`,
+      icon: CHESS_LINK_ICON[t.type] ?? "chess",
+      iconColor: "#c2652a",
+      key: `chess:${t.token}`,
+    }));
+
+    return [...wiki, ...chess].slice(0, 12);
+  }, [link, pages, chessTargets]);
+
   const updateLinkCtx = React.useCallback(() => {
     const ta = taRef.current;
     if (!ta) return;
@@ -179,11 +280,11 @@ export function MarkdownEditor({
     }
   }, []);
 
-  const handlePick = (p: WikiPageSummary) => {
+  const handlePick = (item: LinkSuggestion) => {
     const ta = taRef.current;
     if (!ta || !link) return;
-    // Replace from `link.start` through the current caret with `slug]]`.
-    const after = `${p.slug}]]`;
+    // Replace from `link.start` through the current caret with `<insert>]]`.
+    const after = `${item.insert}]]`;
     const next = ta.value.slice(0, link.start) + after + ta.value.slice(link.caretOffset);
     onChange(next);
     const newCaret = link.start + after.length;
@@ -340,8 +441,7 @@ export function MarkdownEditor({
       {/* Wikilink autocomplete — anchored to caret in viewport coords. */}
       {tab === "edit" && link && coords && (
         <WikilinkAutocomplete
-          pages={pages}
-          query={link.query}
+          items={suggestions}
           caret={coords}
           onPick={handlePick}
           onClose={() => {

@@ -6,6 +6,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChessBoard } from "@/components/chess/ChessBoard";
 import { PgnViewer } from "@/components/chess/PgnViewer";
+import { ChessLinkChip } from "@/components/chess/ChessLinkChip";
+import { ChessEmbed } from "@/components/chess/ChessEmbed";
+import { useChessResolver } from "@/lib/hooks/use-chess-resolver";
 import {
   Table,
   TableBody,
@@ -19,18 +22,40 @@ import { useImageResolver } from "@/lib/hooks/use-image-resolver";
 
 const IMAGE_REF_RE = /image:\/\/([0-9a-fA-F-]{36})/g;
 
-// react-markdown's default URL sanitizer strips unknown schemes. Whitelist
-// `image://<uuid>` so our img renderer receives the original src.
+// Chess-entity wikilink namespaces. `[[game:slug]]` = link, `![[game:slug]]` = embed.
+const CHESS_NS = "game|position|puzzle|study";
+const CHESS_HREF_RE = /chess(?:-embed)?:\/\/(game|position|puzzle|study)\/([^\s)]+)/g;
+
+// react-markdown's default URL sanitizer strips unknown schemes. Whitelist the
+// custom schemes our renderers handle so they receive the original src/href.
 function wikiUrlTransform(url: string): string {
   if (url.startsWith("image://")) return url;
+  if (url.startsWith("chess://") || url.startsWith("chess-embed://")) return url;
   if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/)/i.test(url)) return url;
   return "";
 }
 
 export function preprocessWikilinks(md: string): string {
-  return md
-    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "[$2](/wiki/$1)")
-    .replace(/\[\[([^\]]+)\]\]/g, "[$1](/wiki/$1)");
+  return (
+    md
+      // Chess embed: ![[ns:ident]] / ![[ns:ident|label]] → image marker with a
+      // custom scheme the `img` renderer turns into an inline board/viewer.
+      .replace(
+        new RegExp(`!\\[\\[(${CHESS_NS}):([^\\]|]+)(?:\\|([^\\]]+))?\\]\\]`, "g"),
+        (_m, ns, ident, label) =>
+          `![${(label ?? `${ns}:${ident}`).trim()}](chess-embed://${ns}/${ident.trim()})`,
+      )
+      // Chess link: [[ns:ident]] / [[ns:ident|label]] → link with a custom scheme
+      // the `a` renderer turns into a ChessLinkChip.
+      .replace(
+        new RegExp(`\\[\\[(${CHESS_NS}):([^\\]|]+)(?:\\|([^\\]]+))?\\]\\]`, "g"),
+        (_m, ns, ident, label) =>
+          `[${(label ?? `${ns}:${ident}`).trim()}](chess://${ns}/${ident.trim()})`,
+      )
+      // Plain wiki-page links.
+      .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, "[$2](/wiki/$1)")
+      .replace(/\[\[([^\]]+)\]\]/g, "[$1](/wiki/$1)")
+  );
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -91,6 +116,13 @@ export function WikiContent({
     return Array.from(out);
   }, [processed]);
   const imageResolver = useImageResolver(imageIds);
+
+  const chessTokens = React.useMemo(() => {
+    const out = new Set<string>();
+    for (const m of processed.matchAll(CHESS_HREF_RE)) out.add(`${m[1]}:${m[2]}`);
+    return Array.from(out);
+  }, [processed]);
+  const chess = useChessResolver(chessTokens);
 
   // Intersection observer for active heading tracking
   React.useEffect(() => {
@@ -199,10 +231,36 @@ export function WikiContent({
                 </h4>
               );
             },
-            p: ({ children }) => (
-              <p className="text-sm leading-7 text-foreground/90 mb-4">{children}</p>
-            ),
+            p: ({ children, node }) => {
+              // A standalone chess embed (`![[…]]`) becomes an <img> that we
+              // render as a block board/viewer — unwrap the <p> so the block
+              // markup doesn't nest invalidly inside a paragraph.
+              const kids = (node as { children?: { tagName?: string; properties?: { src?: unknown } }[] })?.children ?? [];
+              const hasEmbed = kids.some(
+                (c) =>
+                  c?.tagName === "img" &&
+                  typeof c?.properties?.src === "string" &&
+                  (c.properties.src as string).startsWith("chess-embed://"),
+              );
+              if (hasEmbed) return <>{children}</>;
+              return <p className="text-sm leading-7 text-foreground/90 mb-4">{children}</p>;
+            },
             a: ({ href, children }) => {
+              if (href?.startsWith("chess://")) {
+                const m = href.match(/^chess:\/\/(game|position|puzzle|study)\/(.+)$/);
+                if (m) {
+                  const token = `${m[1]}:${m[2]}`;
+                  return (
+                    <ChessLinkChip
+                      token={token}
+                      meta={chess.byToken[token]}
+                      loading={chess.loading}
+                      fallback={children}
+                      linkSuffix={linkSuffix}
+                    />
+                  );
+                }
+              }
               if (href?.startsWith("/wiki/")) {
                 const slug = href.slice("/wiki/".length);
                 if (onWikiLinkClick) {
@@ -314,6 +372,20 @@ export function WikiContent({
             img: ({ src, alt }) => {
               const srcStr = typeof src === "string" ? src : "";
               const altStr = typeof alt === "string" ? alt : "";
+              if (srcStr.startsWith("chess-embed://")) {
+                const m = srcStr.match(/^chess-embed:\/\/(game|position|puzzle|study)\/(.+)$/);
+                if (m) {
+                  const token = `${m[1]}:${m[2]}`;
+                  return (
+                    <ChessEmbed
+                      token={token}
+                      meta={chess.byToken[token]}
+                      loading={chess.loading}
+                      linkSuffix={linkSuffix}
+                    />
+                  );
+                }
+              }
               if (!srcStr.startsWith("image://")) {
                 // External / regular image — render as-is.
                 // eslint-disable-next-line @next/next/no-img-element

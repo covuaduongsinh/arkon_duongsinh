@@ -194,6 +194,7 @@ from app.routers import (  # noqa: E402
     auth,
     chess_analysis,
     chess_games,
+    chess_links,
     chess_lms,
     chess_matches,
     chess_positions,
@@ -241,6 +242,7 @@ app.include_router(chess_puzzles.router, prefix="/api", tags=["chess"])
 app.include_router(chess_positions.router, prefix="/api", tags=["chess"])
 app.include_router(chess_analysis.router, prefix="/api", tags=["chess"])
 app.include_router(chess_study.router, prefix="/api", tags=["chess"])
+app.include_router(chess_links.router, prefix="/api", tags=["chess"])
 app.include_router(chess_matches.router, prefix="/api", tags=["chess"])
 app.include_router(chess_lms.router, prefix="/api", tags=["chess-lms"])
 app.include_router(chess_ws.router, prefix="/api")

@@ -1424,11 +1424,18 @@ async def lint_wiki(
     id_to_slug = {r.id: r.slug for r in pages_rows}
     backlink_counts: dict[str, int] = {slug: 0 for slug in all_slugs}
 
+    # Chess-entity wikilinks (`game:…`, `position:…`, `puzzle:…`, `study:…`)
+    # resolve through the chess module, not the wiki — never flag them as dead.
+    from app.services.chess_service import parse_chess_token
+
     for from_page_id, to_slug in links_rows:
         from_slug = id_to_slug.get(from_page_id)
         if not from_slug:
             continue
-        
+
+        if parse_chess_token(to_slug):
+            continue
+
         # Resolve aliases to the canonical slug before checking existence so the
         # backlink count is credited to the real page.
         resolved = alias_lookup.get(to_slug.lower(), to_slug)

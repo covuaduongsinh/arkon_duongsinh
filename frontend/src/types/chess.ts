@@ -4,6 +4,7 @@ export type ChessScopeType = "global" | "department";
 
 export type ChessGameSummary = {
   id: string;
+  slug?: string | null;
   white?: string | null;
   black?: string | null;
   result?: string | null;
@@ -44,6 +45,7 @@ export type ChessGameDetail = ChessGameSummary & {
 
 export type ChessPuzzle = {
   id: string;
+  slug?: string | null;
   fen: string;
   side_to_move: "w" | "b";
   themes: string[];
@@ -73,6 +75,7 @@ export type PuzzleStats = {
 
 export type ChessPosition = {
   id: string;
+  slug?: string | null;
   fen: string;
   label?: string | null;
   description?: string | null;

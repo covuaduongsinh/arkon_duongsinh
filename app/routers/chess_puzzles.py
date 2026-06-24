@@ -30,6 +30,7 @@ def _can_coach(user: Employee) -> bool:
 class PuzzlePublic(BaseModel):
     """Puzzle without the solution — what solvers see."""
     id: uuid.UUID
+    slug: Optional[str] = None
     fen: str
     side_to_move: str
     themes: list[str] = []
@@ -50,7 +51,7 @@ class PuzzleWithSolution(PuzzlePublic):
 
 def _public(p: ChessPuzzle) -> PuzzlePublic:
     return PuzzlePublic(
-        id=p.id, fen=p.fen, side_to_move=p.side_to_move, themes=p.themes or [],
+        id=p.id, slug=p.slug, fen=p.fen, side_to_move=p.side_to_move, themes=p.themes or [],
         rating=p.rating, title=p.title, description=p.description,
         is_published=p.is_published, scope_type=p.scope_type, scope_id=p.scope_id,
         created_at=p.created_at.isoformat(),

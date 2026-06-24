@@ -19,6 +19,7 @@ router = APIRouter()
 
 class PositionResponse(BaseModel):
     id: uuid.UUID
+    slug: Optional[str] = None
     fen: str
     label: Optional[str] = None
     description: Optional[str] = None
@@ -35,7 +36,7 @@ class PositionResponse(BaseModel):
 
 def _response(p: ChessPosition) -> PositionResponse:
     return PositionResponse(
-        id=p.id, fen=p.fen, label=p.label, description=p.description,
+        id=p.id, slug=p.slug, fen=p.fen, label=p.label, description=p.description,
         eval_cp=p.eval_cp, best_move=p.best_move, eval_depth=p.eval_depth,
         themes=p.themes or [], scope_type=p.scope_type, scope_id=p.scope_id,
         created_at=p.created_at.isoformat(),

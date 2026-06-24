@@ -11,6 +11,7 @@ parse, or a FEN that is not a legal position, is rejected before it reaches the 
 """
 
 import io
+import re
 import uuid
 from typing import Optional
 
@@ -30,6 +31,7 @@ from app.database.models import (
     Employee,
 )
 from app.services.permission_engine import build_chess_filter
+from app.utils.text import slugify
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +77,228 @@ def resolve_scope(user: Employee, scope_type: Optional[str], scope_id: Optional[
     if allowed and scope_id in set(allowed):
         return "department", scope_id
     raise ValueError("You cannot create chess content for that department")
+
+
+# ---------------------------------------------------------------------------
+# Wikilink slugs & token resolution
+#
+# Each chess entity carries a `slug` (unique per scope) so it can be a
+# first-class wikilink target: `[[game:<slug>]]`, `[[position:<slug>]]`,
+# `[[puzzle:<slug>]]`, `[[study:<slug>]]` (link) or `![[…]]` (embed). The
+# wikilink graph stores the raw token in wiki_links.to_slug / chess_lesson_links
+# (no schema change needed — extract_wikilinks captures the whole target). This
+# module owns slug generation and resolving a token back to the entity.
+# ---------------------------------------------------------------------------
+
+CHESS_LINK_NAMESPACES = ("game", "position", "puzzle", "study")
+_NS_MODEL = {
+    "game": ChessGame,
+    "position": ChessPosition,
+    "puzzle": ChessPuzzle,
+    "study": ChessStudySet,
+}
+
+
+def _dedupe_slug(base: str, taken: set[str]) -> str:
+    """Return `base`, or `base-2`, `base-3`… so it's unique within `taken`.
+    Mutates `taken` so callers can assign several slugs in one batch."""
+    slug = base
+    n = 2
+    while slug in taken:
+        slug = f"{base}-{n}"
+        n += 1
+    taken.add(slug)
+    return slug
+
+
+async def _existing_slugs(session: AsyncSession, model, scope_type: str, scope_id) -> set[str]:
+    stmt = select(model.slug).where(model.scope_type == scope_type)
+    stmt = stmt.where(model.scope_id == scope_id) if scope_id is not None else stmt.where(model.scope_id.is_(None))
+    return {s for s in (await session.execute(stmt)).scalars().all() if s}
+
+
+def _game_slug_base(white, black, event, played_at) -> str:
+    label = "-".join(p.strip() for p in (white, black, event) if p and p.strip() and p.strip() != "?")
+    year = ""
+    if played_at:
+        m = re.match(r"(\d{4})", played_at)
+        if m:
+            year = m.group(1)
+    return f"{label}-{year}" if year else label
+
+
+def parse_chess_token(target: str):
+    """Split a wikilink target like 'game:carlsen-…' into (ns, ident).
+
+    Returns None when it isn't a recognized chess namespace (so plain wiki-page
+    `[[slug]]` targets fall through unchanged)."""
+    if not target or ":" not in target:
+        return None
+    ns, _, ident = target.partition(":")
+    ns, ident = ns.strip().lower(), ident.strip()
+    if ns in CHESS_LINK_NAMESPACES and ident:
+        return ns, ident
+    return None
+
+
+async def _fetch_chess_entity(session: AsyncSession, user: Employee, ns: str, ident: str):
+    """Resolve a token's identifier (slug first, then UUID) to an entity the
+    user may read. Honours scope and puzzle publish-visibility."""
+    model = _NS_MODEL.get(ns)
+    if model is None:
+        return None
+    allowed, clause = _scope_clause(model, user, "read")
+    if not allowed:
+        return None
+    base = select(model)
+    if clause is not None:
+        base = base.where(clause)
+    if model is ChessPuzzle and not _can_coach(user):
+        base = base.where(ChessPuzzle.is_published.is_(True))
+    row = (await session.execute(base.where(model.slug == ident))).scalars().first()
+    if row is None:
+        try:
+            ident_uuid = uuid.UUID(ident)
+        except ValueError:
+            return None
+        row = (await session.execute(base.where(model.id == ident_uuid))).scalars().first()
+    return row
+
+
+def _entity_meta(ns: str, row) -> dict:
+    """Compact metadata for a resolved chess entity (chip + embed rendering)."""
+    if ns == "game":
+        subtitle = " · ".join(x for x in (row.opening_name, row.result, row.event) if x)
+        return {
+            "type": "game", "id": str(row.id), "slug": row.slug,
+            "title": f"{row.white or '?'} – {row.black or '?'}",
+            "subtitle": subtitle or None, "route": f"/chess/games/{row.id}",
+            "result": row.result,
+        }
+    if ns == "position":
+        return {
+            "type": "position", "id": str(row.id), "slug": row.slug,
+            "title": row.label or "Thế cờ", "subtitle": None,
+            "route": f"/chess/positions/{row.id}", "fen": row.fen, "eval_cp": row.eval_cp,
+        }
+    if ns == "puzzle":
+        return {
+            "type": "puzzle", "id": str(row.id), "slug": row.slug,
+            "title": row.title or "Bài tập", "subtitle": None,
+            "route": f"/chess/puzzles/{row.id}", "fen": row.fen, "side_to_move": row.side_to_move,
+        }
+    # study
+    return {
+        "type": "study", "id": str(row.id), "slug": row.slug,
+        "title": row.title, "subtitle": row.kind, "route": f"/chess/study/{row.id}",
+    }
+
+
+async def resolve_chess_tokens(session: AsyncSession, user: Employee, tokens: list[str]) -> list[dict]:
+    """Batch-resolve `[[ns:ident]]` tokens → metadata for chips/embeds.
+
+    Unknown / inaccessible tokens come back as `{token, exists: False}` so the
+    frontend can render a muted "missing" chip."""
+    out: list[dict] = []
+    for token in tokens:
+        parsed = parse_chess_token(token)
+        if not parsed:
+            out.append({"token": token, "exists": False})
+            continue
+        ns, ident = parsed
+        row = await _fetch_chess_entity(session, user, ns, ident)
+        if row is None:
+            out.append({"token": token, "type": ns, "exists": False})
+            continue
+        meta = _entity_meta(ns, row)
+        meta.update(token=token, exists=True)
+        out.append(meta)
+    return out
+
+
+async def search_link_targets(
+    session: AsyncSession,
+    user: Employee,
+    *,
+    q: Optional[str] = None,
+    type_filter: Optional[str] = None,
+    limit: int = 8,
+) -> list[dict]:
+    """Search chess entities for the `[[` autocomplete pool. Scope-filtered.
+
+    Returns `{token, type, title, subtitle}` rows. When `type_filter` matches a
+    namespace (user typed e.g. `[[game:`), results are restricted to that type."""
+    ns_list = [type_filter] if type_filter in CHESS_LINK_NAMESPACES else list(CHESS_LINK_NAMESPACES)
+    per = limit if type_filter else max(2, limit // len(ns_list))
+    results: list[dict] = []
+    for ns in ns_list:
+        model = _NS_MODEL[ns]
+        allowed, clause = _scope_clause(model, user, "read")
+        if not allowed:
+            continue
+        stmt = select(model).where(model.slug.isnot(None))
+        if clause is not None:
+            stmt = stmt.where(clause)
+        if model is ChessPuzzle and not _can_coach(user):
+            stmt = stmt.where(ChessPuzzle.is_published.is_(True))
+        if q:
+            like = f"%{q}%"
+            if ns == "game":
+                cond = or_(model.slug.ilike(like), ChessGame.white.ilike(like),
+                           ChessGame.black.ilike(like), ChessGame.opening_name.ilike(like),
+                           ChessGame.event.ilike(like))
+            elif ns == "position":
+                cond = or_(model.slug.ilike(like), ChessPosition.label.ilike(like))
+            else:  # puzzle | study both expose `title`
+                cond = or_(model.slug.ilike(like), model.title.ilike(like))
+            stmt = stmt.where(cond)
+        stmt = stmt.order_by(model.created_at.desc()).limit(per)
+        for row in (await session.execute(stmt)).scalars().all():
+            meta = _entity_meta(ns, row)
+            results.append({
+                "token": f"{ns}:{row.slug}", "type": ns,
+                "title": meta["title"], "subtitle": meta.get("subtitle"),
+            })
+    return results[:limit]
+
+
+async def chess_backlinks(session: AsyncSession, user: Employee, ns: str, entity_id) -> dict:
+    """Wiki pages and chess lessons that reference this chess entity.
+
+    Matches both the slug token (`game:<slug>`) and the UUID token
+    (`game:<uuid>`) so references authored either way are caught."""
+    from app.database.models import (
+        ChessLesson, ChessLessonLink, WikiLink, WikiPage,
+    )
+
+    row = await _fetch_chess_entity(session, user, ns, str(entity_id))
+    if row is None:
+        return {"pages": [], "lessons": []}
+    tokens = [f"{ns}:{entity_id}"]
+    if getattr(row, "slug", None):
+        tokens.append(f"{ns}:{row.slug}")
+
+    pages = (await session.execute(
+        select(WikiPage.slug, WikiPage.title, WikiPage.scope_type, WikiPage.scope_id)
+        .join(WikiLink, WikiLink.from_page_id == WikiPage.id)
+        .where(WikiLink.to_slug.in_(tokens))
+        .distinct()
+    )).all()
+    lessons = (await session.execute(
+        select(ChessLesson.id, ChessLesson.title, ChessLesson.class_id)
+        .join(ChessLessonLink, ChessLessonLink.lesson_id == ChessLesson.id)
+        .where(ChessLessonLink.to_slug.in_(tokens))
+        .order_by(ChessLesson.created_at.desc())
+    )).all()
+    return {
+        "pages": [
+            {"slug": s, "title": t, "scope_type": st, "scope_id": str(sid) if sid else None}
+            for s, t, st, sid in pages
+        ],
+        "lessons": [
+            {"id": str(i), "title": t, "class_id": str(c)} for i, t, c in lessons
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -169,10 +393,14 @@ async def import_pgn(
     """Parse PGN and persist one ChessGame per game. Returns the created rows."""
     s_type, s_id = resolve_scope(user, scope_type, scope_id)
     parsed = parse_pgn(pgn_text)
+    taken = await _existing_slugs(session, ChessGame, s_type, s_id)
     created: list[ChessGame] = []
     for g in parsed:
+        base = slugify(_game_slug_base(g["white"], g["black"], g["event"], g["played_at"]), 80)
+        slug = _dedupe_slug(base or f"game-{uuid.uuid4().hex[:8]}", taken)
         game = ChessGame(
             pgn=g["pgn"],
+            slug=slug,
             headers=g["headers"],
             white=g["white"],
             black=g["black"],
@@ -641,8 +869,11 @@ async def create_puzzle(
         board.push(move)
 
     s_type, s_id = resolve_scope(user, scope_type, scope_id)
+    taken = await _existing_slugs(session, ChessPuzzle, s_type, s_id)
+    slug = _dedupe_slug(slugify(title, 80) or f"puzzle-{uuid.uuid4().hex[:8]}", taken)
     puzzle = ChessPuzzle(
         fen=norm_fen,
+        slug=slug,
         solution_moves=solution_moves,
         side_to_move="w" if chess.Board(norm_fen).turn == chess.WHITE else "b",
         themes=themes or [],
@@ -835,8 +1066,11 @@ async def create_position(
 ) -> ChessPosition:
     norm_fen = validate_fen(fen)
     s_type, s_id = resolve_scope(user, scope_type, scope_id)
+    taken = await _existing_slugs(session, ChessPosition, s_type, s_id)
+    slug = _dedupe_slug(slugify(label, 80) or f"position-{uuid.uuid4().hex[:8]}", taken)
     pos = ChessPosition(
         fen=norm_fen,
+        slug=slug,
         label=label,
         description=description,
         themes=themes or [],
@@ -893,8 +1127,10 @@ async def create_study_set(
     scope_id: Optional[uuid.UUID] = None,
 ) -> ChessStudySet:
     s_type, s_id = resolve_scope(user, scope_type, scope_id)
+    taken = await _existing_slugs(session, ChessStudySet, s_type, s_id)
+    slug = _dedupe_slug(slugify(title, 80) or f"study-{uuid.uuid4().hex[:8]}", taken)
     study = ChessStudySet(
-        title=title, description=description, kind=kind, wiki_slug=wiki_slug,
+        title=title, slug=slug, description=description, kind=kind, wiki_slug=wiki_slug,
         scope_type=s_type, scope_id=s_id, created_by_employee_id=user.id,
     )
     session.add(study)

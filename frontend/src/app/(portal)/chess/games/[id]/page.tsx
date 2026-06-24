@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PgnViewer } from "@/components/chess/PgnViewer";
 import { EvalGraph } from "@/components/chess/EvalGraph";
+import { ChessBacklinks } from "@/components/chess/ChessBacklinks";
+import { WikilinkTokens } from "@/components/chess/WikilinkTokens";
 import type { ChessGameDetail } from "@/types/chess";
 
 export default function ChessGameDetailPage() {
@@ -149,6 +151,14 @@ export default function ChessGameDetailPage() {
           {t("Analyze final position")}
         </Link>
       )}
+
+      {game.slug && (
+        <div className="max-w-md">
+          <WikilinkTokens ns="game" slug={game.slug} />
+        </div>
+      )}
+
+      <ChessBacklinks type="game" id={game.id} />
 
       <Link href="/chess/games" className="text-sm text-muted-foreground hover:text-foreground">
         {t("Back to Games")}

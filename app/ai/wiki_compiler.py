@@ -107,6 +107,11 @@ the body content. (Slugs are still in Latin characters — see slug rules below.
 - Use `[[slug]]` or `[[slug|display text]]` to link between pages.
 - Always link the first mention of any entity/concept to its dedicated page.
 - Link to pages that don't exist yet — the next source might create them.
+- Chess-entity links use a namespace: `[[game:<slug>]]`, `[[position:<slug>]]`,
+  `[[puzzle:<slug>]]`, `[[study:<slug>]]` (link) and `![[position:<slug>]]` /
+  `![[game:<slug>]]` (embed the board / game viewer inline). PRESERVE any such
+  tokens already present in the source verbatim — do NOT rewrite the namespace,
+  alter the slug, or invent new chess tokens (you don't know which entities exist).
 
 # Content quality — CRITICAL
 Each page must be a proper encyclopedic article, NOT a flat bullet list copied

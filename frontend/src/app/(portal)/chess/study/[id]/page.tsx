@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ChessBoard } from "@/components/chess/ChessBoard";
+import { ChessBacklinks } from "@/components/chess/ChessBacklinks";
+import { WikilinkTokens } from "@/components/chess/WikilinkTokens";
 
 type StudyItem = {
   id: string;
@@ -23,6 +25,7 @@ type StudyItem = {
 
 type StudySetDetail = {
   id: string;
+  slug?: string | null;
   title: string;
   description?: string | null;
   kind: string;
@@ -209,6 +212,12 @@ export default function ChessStudyDetailPage() {
                 {it.item_type === "game" && it.game_id && (
                   <Link href={`/chess/games/${it.game_id}`} className="text-xs text-primary hover:underline">Open game →</Link>
                 )}
+                {it.item_type === "fen" && it.fen_id && (
+                  <Link href={`/chess/positions/${it.fen_id}`} className="text-xs text-primary hover:underline">Mở thế cờ →</Link>
+                )}
+                {it.item_type === "puzzle" && it.puzzle_id && (
+                  <Link href={`/chess/puzzles/${it.puzzle_id}`} className="text-xs text-primary hover:underline">Mở bài tập →</Link>
+                )}
               </div>
               {fens[it.id] && <ChessBoard fen={fens[it.id]} className="max-w-[260px]" />}
               {it.note && <p className="mt-2 text-sm text-muted-foreground">{it.note}</p>}
@@ -216,6 +225,14 @@ export default function ChessStudyDetailPage() {
           ))}
         </div>
       )}
+
+      {study.slug && (
+        <div className="max-w-md">
+          <WikilinkTokens ns="study" slug={study.slug} />
+        </div>
+      )}
+
+      <ChessBacklinks type="study" id={study.id} />
 
       <Link href="/chess/study" className="text-sm text-muted-foreground hover:text-foreground">← Back to Study sets</Link>
     </>

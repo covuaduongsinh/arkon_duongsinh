@@ -105,7 +105,9 @@ export default function ChessPositionsPage() {
             <div key={p.id} className="rounded-lg border border-black/10 bg-card p-3">
               <ChessBoard fen={p.fen} className="max-w-[260px]" />
               <div className="mt-2 flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium">{p.label || "Untitled"}</span>
+                <Link href={`/chess/positions/${p.id}`} className="truncate text-sm font-medium hover:text-primary hover:underline">
+                  {p.label || "Untitled"}
+                </Link>
                 <Link href={`/chess/analysis?fen=${encodeURIComponent(p.fen)}`} className="shrink-0 text-xs text-primary hover:underline">
                   Analyze →
                 </Link>

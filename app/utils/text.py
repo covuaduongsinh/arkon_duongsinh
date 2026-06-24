@@ -33,24 +33,28 @@ def parse_json_loose(raw: str) -> Any:
         raise
 
 
-def slugify(text: str) -> str:
+def slugify(text: str, max_len: int | None = None) -> str:
     """
     Convert text to a URL-friendly slug.
     Supports Vietnamese characters by removing diacritics.
+
+    `đ`/`Đ` are mapped to `d` first — NFKD does not decompose the stroke, so
+    without this they'd be dropped by the ascii filter ("đường" → "uong").
+    `max_len` truncates the result (then trims a dangling hyphen).
     """
     if not text:
         return ""
-    
-    # Convert to lowercase
-    text = text.lower()
-    
-    # Remove Vietnamese diacritics
+
+    # Map đ/Đ → d, then lowercase.
+    text = text.replace("đ", "d").replace("Đ", "D").lower()
+
+    # Remove the remaining Vietnamese diacritics.
     text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
-    
-    # Replace non-alphanumeric characters with hyphens
-    text = re.sub(r'[^a-z0-9]+', '-', text)
-    
-    # Remove leading/trailing hyphens
-    text = text.strip('-')
-    
+
+    # Replace non-alphanumeric characters with hyphens; collapse and trim.
+    text = re.sub(r'[^a-z0-9]+', '-', text).strip('-')
+
+    if max_len:
+        text = text[:max_len].strip('-')
+
     return text
