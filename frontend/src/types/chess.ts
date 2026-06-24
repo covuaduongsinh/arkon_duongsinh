@@ -48,6 +48,10 @@ export type ChessPuzzle = {
   slug?: string | null;
   fen: string;
   side_to_move: "w" | "b";
+  // Lichess lead-in: opponent's auto-played move and the position before it.
+  // Both null for hand-authored puzzles.
+  setup_move?: string | null;
+  setup_fen?: string | null;
   themes: string[];
   rating?: number | null;
   popularity?: number | null;

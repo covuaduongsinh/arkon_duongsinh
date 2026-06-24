@@ -90,6 +90,8 @@ const vi: Dict = {
   "Not the best move — see the solution on the board.": "Chưa phải nước hay nhất — xem lời giải trên bàn cờ.",
   "Next puzzle": "Bài tiếp theo",
   "Show solution": "Hiện lời giải",
+  "Opponent just moved — your turn.": "Đối phương vừa đi — đến lượt bạn.",
+  "Opponent is moving…": "Đối phương đang đi…",
 
   // ── Play (sparring) ──
   "Play against the engine or a colleague.": "Đấu với engine hoặc đồng nghiệp.",

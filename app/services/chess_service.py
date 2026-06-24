@@ -390,6 +390,23 @@ def _fen_facts(fen: str) -> tuple[int, str]:
     return piece_count, side
 
 
+def apply_uci_to_fen(fen: str, uci: str) -> Optional[str]:
+    """Return the FEN after playing `uci` on `fen`, or None if illegal/unparsable.
+
+    Used to normalize Lichess puzzles: applying the lead-in move yields the
+    position where the solver is to move.
+    """
+    try:
+        board = chess.Board(fen)
+        move = chess.Move.from_uci(uci)
+        if move not in board.legal_moves:
+            return None
+        board.push(move)
+        return board.fen()
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Games
 # ---------------------------------------------------------------------------

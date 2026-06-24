@@ -40,6 +40,8 @@ class PuzzlePublic(BaseModel):
     slug: Optional[str] = None
     fen: str
     side_to_move: str
+    setup_move: Optional[str] = None
+    setup_fen: Optional[str] = None
     themes: list[str] = []
     rating: Optional[int] = None
     popularity: Optional[int] = None
@@ -63,7 +65,8 @@ class PuzzleWithSolution(PuzzlePublic):
 
 def _public(p: ChessPuzzle) -> PuzzlePublic:
     return PuzzlePublic(
-        id=p.id, slug=p.slug, fen=p.fen, side_to_move=p.side_to_move, themes=p.themes or [],
+        id=p.id, slug=p.slug, fen=p.fen, side_to_move=p.side_to_move,
+        setup_move=p.setup_move, setup_fen=p.setup_fen, themes=p.themes or [],
         rating=p.rating, popularity=p.popularity, nb_plays=p.nb_plays,
         piece_count=p.piece_count, opening_name=p.opening_name, source=p.source,
         title=p.title, description=p.description,

@@ -42,22 +42,38 @@ export function PuzzleTrainer({
   puzzle: ChessPuzzle;
   onNext?: () => void;
 }) {
+  const hasLeadIn = !!(puzzle.setup_move && puzzle.setup_fen);
   const [status, setStatus] = useState<Status>("thinking");
-  const [boardFen, setBoardFen] = useState(puzzle.fen);
+  const [boardFen, setBoardFen] = useState(hasLeadIn ? puzzle.setup_fen! : puzzle.fen);
+  const [leadInDone, setLeadInDone] = useState(!hasLeadIn);
   const [played, setPlayed] = useState<string[]>([]);
   const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null);
   const [solution, setSolution] = useState<string[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [start] = useState(() => Date.now());
 
-  // Reset when the puzzle changes.
+  // Reset when the puzzle changes. For Lichess puzzles, open on the pre-lead-in
+  // position and auto-play the opponent's lead-in move before the solver responds.
   useEffect(() => {
     setStatus("thinking");
-    setBoardFen(puzzle.fen);
     setPlayed([]);
-    setLastMove(null);
     setSolution(null);
-  }, [puzzle.id, puzzle.fen]);
+    if (puzzle.setup_move && puzzle.setup_fen) {
+      setBoardFen(puzzle.setup_fen);
+      setLastMove(null);
+      setLeadInDone(false);
+      const tid = setTimeout(() => {
+        const post = playUci(puzzle.setup_fen!, puzzle.setup_move!);
+        setBoardFen(post ?? puzzle.fen);
+        setLastMove({ from: puzzle.setup_move!.slice(0, 2), to: puzzle.setup_move!.slice(2, 4) });
+        setLeadInDone(true);
+      }, 600);
+      return () => clearTimeout(tid);
+    }
+    setBoardFen(puzzle.fen);
+    setLastMove(null);
+    setLeadInDone(true);
+  }, [puzzle.id, puzzle.fen, puzzle.setup_move, puzzle.setup_fen]);
 
   const orientation = puzzle.side_to_move === "w" ? "white" : "black";
 
@@ -102,11 +118,15 @@ export function PuzzleTrainer({
   const solutionPgn = useMemo(() => {
     if (!solution) return null;
     try {
+      // Include the lead-in move so the review shows the full Lichess line.
+      if (puzzle.setup_move && puzzle.setup_fen) {
+        return buildSolutionPgn(puzzle.setup_fen, [puzzle.setup_move, ...solution]);
+      }
       return buildSolutionPgn(puzzle.fen, solution);
     } catch {
       return null;
     }
-  }, [solution, puzzle.fen]);
+  }, [solution, puzzle.fen, puzzle.setup_move, puzzle.setup_fen]);
 
   return (
     <div className="flex flex-col gap-4 lg:flex-row">
@@ -117,7 +137,7 @@ export function PuzzleTrainer({
           <ChessBoard
             fen={boardFen}
             orientation={orientation}
-            interactive={status === "thinking" && !submitting}
+            interactive={status === "thinking" && !submitting && leadInDone}
             onMove={onMove}
             lastMove={lastMove}
           />
@@ -133,6 +153,11 @@ export function PuzzleTrainer({
           {puzzle.side_to_move === "w" ? t("White to move.") : t("Black to move.")}
           {puzzle.description ? ` ${puzzle.description}` : ""}
         </p>
+        {hasLeadIn && status === "thinking" && (
+          <p className="text-xs text-muted-foreground/80">
+            {leadInDone ? t("Opponent just moved — your turn.") : t("Opponent is moving…")}
+          </p>
+        )}
         {puzzle.themes?.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {puzzle.themes.map((th) => (

@@ -227,7 +227,8 @@ _LICHESS_ROW = {
 }
 
 
-def test_lichess_row_to_values_maps_all_fields():
+def test_lichess_row_to_values_normalizes_lead_in():
+    from app.services import chess_service
     from app.services.puzzle_import_service import row_to_values
 
     v = row_to_values(_LICHESS_ROW)
@@ -235,11 +236,15 @@ def test_lichess_row_to_values_maps_all_fields():
     assert v["slug"] == "lichess-00shx"  # lower-cased PuzzleId
     assert v["lichess_id"] == "00sHx"
     assert v["source"] == "lichess"
-    assert v["solution_moves"] == ["e8d7", "a2e6", "d7d8", "f7f8"]
+    # The opponent's lead-in move (Moves[0]) is split out; the solver finds Moves[1:].
+    assert v["setup_move"] == "e8d7"
+    assert v["setup_fen"] == _LICHESS_ROW["FEN"]
+    assert v["solution_moves"] == ["a2e6", "d7d8", "f7f8"]
+    # fen is now the solve position (after the lead-in move) — solver = White to move.
+    assert v["fen"] == chess_service.apply_uci_to_fen(_LICHESS_ROW["FEN"], "e8d7")
+    assert v["side_to_move"] == "w"
     assert v["themes"] == ["mate", "mateIn2", "middlegame", "short"]
-    assert v["side_to_move"] == "b"  # FEN has black to move
     assert v["rating"] == 1760 and v["popularity"] == 93 and v["nb_plays"] == 1234
-    # OpeningTags → most-specific tag, unslugged.
     assert v["opening_name"] == "Italian Game Classical Variation"
     assert v["is_published"] is False
     assert isinstance(v["piece_count"], int) and v["piece_count"] > 0
@@ -249,6 +254,22 @@ def test_lichess_row_to_values_skips_blank_fen():
     from app.services.puzzle_import_service import row_to_values
 
     assert row_to_values({"PuzzleId": "x", "FEN": "  "}) is None
+
+
+def test_lichess_row_to_values_skips_single_move():
+    from app.services.puzzle_import_service import row_to_values
+
+    # A valid Lichess puzzle needs the lead-in move + at least one solution move.
+    row = dict(_LICHESS_ROW, Moves="e8d7")
+    assert row_to_values(row) is None
+
+
+def test_apply_uci_to_fen():
+    # Legal move flips the side to move; illegal/garbage returns None.
+    after = chess_service.apply_uci_to_fen(START_FEN, "e2e4")
+    assert after is not None and after.split()[1] == "b"
+    assert chess_service.apply_uci_to_fen(START_FEN, "e2e5") is None  # illegal pawn jump
+    assert chess_service.apply_uci_to_fen("not-a-fen", "e2e4") is None
 
 
 def test_lichess_passes_filters():

@@ -92,15 +92,26 @@ def row_to_values(row: dict) -> Optional[dict]:
     fen = (row.get("FEN") or "").strip()
     if not fen:
         return None
-    pid = (row.get("PuzzleId") or "").strip()
-    piece_count, side = chess_service._fen_facts(fen)
     moves = (row.get("Moves") or "").split()
+    # A valid Lichess puzzle has >=2 plies: the opponent's lead-in move (auto-played)
+    # followed by the solver's solution. Apply the lead-in so the stored position is
+    # the one where the solver is to move (uniform with hand-authored puzzles).
+    if len(moves) < 2:
+        return None
+    setup_move = moves[0]
+    post_fen = chess_service.apply_uci_to_fen(fen, setup_move)
+    if post_fen is None:
+        return None
+    pid = (row.get("PuzzleId") or "").strip()
+    piece_count, side = chess_service._fen_facts(post_fen)
     themes = (row.get("Themes") or "").split()
     game_url = (row.get("GameUrl") or "").strip()
     return {
-        "fen": fen,
+        "fen": post_fen,
+        "setup_fen": fen,
+        "setup_move": setup_move,
         "slug": f"lichess-{pid.lower()}" if pid else None,
-        "solution_moves": moves,
+        "solution_moves": moves[1:],
         "side_to_move": side,
         "piece_count": piece_count,
         "themes": themes,

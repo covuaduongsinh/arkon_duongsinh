@@ -1433,6 +1433,11 @@ class ChessPuzzle(Base):
         ARRAY(String), nullable=False, default=list,
     )
     side_to_move: Mapped[str] = mapped_column(String(1), nullable=False, default="w")  # w | b
+    # Lichess lead-in: opponent's move played automatically before the solver responds.
+    # `setup_fen` is the position BEFORE that move; `fen` is the solve position (after it).
+    # Both NULL for hand-authored puzzles (their fen is already the solve position).
+    setup_move: Mapped[Optional[str]] = mapped_column(String(10))  # UCI
+    setup_fen: Mapped[Optional[str]] = mapped_column(String(120))
     themes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     rating: Mapped[Optional[int]] = mapped_column(Integer)
     popularity: Mapped[Optional[int]] = mapped_column(Integer)
