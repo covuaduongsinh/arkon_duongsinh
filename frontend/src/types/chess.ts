@@ -5,6 +5,7 @@ export type ChessScopeType = "global" | "department";
 export type ChessGameSummary = {
   id: string;
   slug?: string | null;
+  title?: string | null;
   white?: string | null;
   black?: string | null;
   result?: string | null;
@@ -13,33 +14,54 @@ export type ChessGameSummary = {
   white_elo?: number | null;
   black_elo?: number | null;
   event?: string | null;
+  site?: string | null;
   played_at?: string | null;
+  played_year?: number | null;
   ply_count: number;
+  final_fen?: string | null;
+  themes: string[];
   source_game: string;
+  is_published: boolean;
+  popularity: number;
+  blunder_count?: number | null;
+  brilliant_count?: number | null;
+  analysis_status: "none" | "queued" | "running" | "done" | "error";
   scope_type: ChessScopeType;
   scope_id?: string | null;
   created_at: string;
+};
+
+export type GameFacets = {
+  openings: FacetCount[];
+  events: FacetCount[];
+  sites: FacetCount[];
+  results: FacetCount[];
+  sources: FacetCount[];
+  themes: FacetCount[];
+  white_elo: { min: number | null; max: number | null } | null;
+  ply: { min: number | null; max: number | null } | null;
+  year: { min: number | null; max: number | null } | null;
+  analyzed: { done: number; pending: number };
 };
 
 export type GameAnalysisMove = {
   ply: number;
   san: string;
   side: "white" | "black";
-  class: "blunder" | "mistake" | "inaccuracy" | "ok";
+  class: "blunder" | "mistake" | "inaccuracy" | "ok" | "brilliant";
 };
 
 export type GameAnalysis = {
   evals: number[]; // white-POV centipawns per position
   moves: GameAnalysisMove[];
-  summary: { blunder: number; mistake: number; inaccuracy: number };
+  summary: { blunder: number; mistake: number; inaccuracy: number; brilliant?: number };
 };
 
 export type ChessGameDetail = ChessGameSummary & {
   pgn: string;
+  description?: string | null;
   headers: Record<string, string>;
-  final_fen?: string | null;
   knowledge_type_slugs: string[];
-  analysis_status: "none" | "queued" | "running" | "done" | "error";
   analysis_json?: GameAnalysis | null;
 };
 

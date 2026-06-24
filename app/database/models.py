@@ -1358,6 +1358,20 @@ class ChessGame(Base):
     # Human-readable, stable handle for `[[game:<slug>]]` wikilinks. Unique per
     # scope; auto-generated from the players/event/year (see chess_service).
     slug: Mapped[Optional[str]] = mapped_column(String(120))
+    # Library curation: coaches stage games as drafts, then publish for students.
+    is_published: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
+    title: Mapped[Optional[str]] = mapped_column(String(300))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    themes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    # Denormalized for library filtering/facets.
+    site: Mapped[Optional[str]] = mapped_column(String(200))  # PGN [Site]
+    played_year: Mapped[Optional[int]] = mapped_column(Integer)  # leading 4 digits of played_at
+    popularity: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")  # view count
+    # Move-quality counts from engine analysis (Phase B).
+    blunder_count: Mapped[Optional[int]] = mapped_column(Integer)
+    brilliant_count: Mapped[Optional[int]] = mapped_column(Integer)
     headers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     # Denormalized PGN seven-tag-roster + ratings for search/listing.
     white: Mapped[Optional[str]] = mapped_column(String(200))
@@ -1413,6 +1427,10 @@ class ChessGame(Base):
         Index("ix_chess_games_scope", "scope_type", "scope_id"),
         Index("ix_chess_games_eco", "eco"),
         Index("ix_chess_games_result", "result"),
+        Index("ix_chess_games_published", "is_published"),
+        Index("ix_chess_games_played_year", "played_year"),
+        Index("ix_chess_games_popularity", "popularity"),
+        Index("ix_chess_games_themes", "themes", postgresql_using="gin"),
         UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_games_scope_slug"),
     )
 

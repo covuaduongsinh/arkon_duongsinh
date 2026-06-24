@@ -17,7 +17,7 @@ from typing import Optional
 
 import chess
 import chess.pgn
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -341,10 +341,16 @@ def parse_pgn(pgn_text: str) -> list[dict]:
             except (TypeError, ValueError):
                 return None
 
+        def _year(date_str: Optional[str]) -> Optional[int]:
+            # PGN dates are often partial ("2021.??.??"); take the leading 4 digits.
+            head = (date_str or "")[:4]
+            return int(head) if head.isdigit() else None
+
         # Re-export so we store clean, canonical PGN.
         exporter = chess.pgn.StringExporter(headers=True, variations=True, comments=True)
         clean_pgn = game.accept(exporter)
 
+        played_at = headers.get("Date") or headers.get("UTCDate")
         games.append({
             "pgn": clean_pgn,
             "headers": headers,
@@ -356,7 +362,9 @@ def parse_pgn(pgn_text: str) -> list[dict]:
             "white_elo": _int(headers.get("WhiteElo")),
             "black_elo": _int(headers.get("BlackElo")),
             "event": headers.get("Event"),
-            "played_at": headers.get("Date") or headers.get("UTCDate"),
+            "site": headers.get("Site"),
+            "played_at": played_at,
+            "played_year": _year(played_at),
             "ply_count": ply,
             "final_fen": board.fen() if ply else None,
         })
@@ -440,7 +448,9 @@ async def import_pgn(
             white_elo=g["white_elo"],
             black_elo=g["black_elo"],
             event=g["event"],
+            site=g.get("site"),
             played_at=g["played_at"],
+            played_year=g.get("played_year"),
             ply_count=g["ply_count"],
             final_fen=g["final_fen"],
             knowledge_type_slugs=knowledge_type_slugs or [],
@@ -455,13 +465,50 @@ async def import_pgn(
     return created
 
 
+# Sort keys → ORDER BY clause for the game library. NULLs last so unrated/
+# unscored/unanalyzed games don't crowd the top.
+_GAME_SORTS = {
+    "recent": (ChessGame.created_at.desc(),),
+    "popularity": (ChessGame.popularity.desc().nulls_last(), ChessGame.created_at.desc()),
+    "elo_desc": (func.greatest(ChessGame.white_elo, ChessGame.black_elo).desc().nulls_last(), ChessGame.created_at.desc()),
+    "white_elo_desc": (ChessGame.white_elo.desc().nulls_last(), ChessGame.created_at.desc()),
+    "ply_desc": (ChessGame.ply_count.desc(), ChessGame.created_at.desc()),
+    "ply_asc": (ChessGame.ply_count.asc(), ChessGame.created_at.desc()),
+    "year_desc": (ChessGame.played_year.desc().nulls_last(), ChessGame.created_at.desc()),
+    "result": (ChessGame.result.asc().nulls_last(),),
+    "title": (ChessGame.title.asc().nulls_last(),),
+    "blunders_desc": (ChessGame.blunder_count.desc().nulls_last(), ChessGame.created_at.desc()),
+    "brilliants_desc": (ChessGame.brilliant_count.desc().nulls_last(), ChessGame.created_at.desc()),
+}
+
+
 async def list_games(
     session: AsyncSession,
     user: Employee,
     *,
     search: Optional[str] = None,
+    white: Optional[str] = None,
+    black: Optional[str] = None,
     eco: Optional[str] = None,
     result: Optional[str] = None,
+    opening: Optional[str] = None,
+    event: Optional[str] = None,
+    site: Optional[str] = None,
+    themes: Optional[list[str]] = None,
+    source_game: Optional[str] = None,
+    analysis_status: Optional[str] = None,
+    min_elo: Optional[int] = None,
+    max_elo: Optional[int] = None,
+    min_ply: Optional[int] = None,
+    max_ply: Optional[int] = None,
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
+    min_blunders: Optional[int] = None,
+    min_brilliants: Optional[int] = None,
+    named: bool = False,
+    sort: str = "recent",
+    published_only: bool = True,
+    drafts_only: bool = False,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[ChessGame], int]:
@@ -475,28 +522,163 @@ async def list_games(
         base = base.where(clause)
         count_base = count_base.where(clause)
 
+    conds = []
+    # Students only ever see published games; coaches can opt to review drafts.
+    if published_only or not _can_coach(user):
+        conds.append(ChessGame.is_published.is_(True))
+    elif drafts_only:
+        conds.append(ChessGame.is_published.is_(False))
     if search:
         like = f"%{search}%"
-        cond = or_(
-            ChessGame.white.ilike(like),
-            ChessGame.black.ilike(like),
-            ChessGame.opening_name.ilike(like),
-            ChessGame.event.ilike(like),
-        )
-        base = base.where(cond)
-        count_base = count_base.where(cond)
+        conds.append(or_(
+            ChessGame.white.ilike(like), ChessGame.black.ilike(like),
+            ChessGame.opening_name.ilike(like), ChessGame.event.ilike(like),
+            ChessGame.site.ilike(like), ChessGame.title.ilike(like),
+        ))
+    if white:
+        conds.append(ChessGame.white.ilike(f"%{white}%"))
+    if black:
+        conds.append(ChessGame.black.ilike(f"%{black}%"))
     if eco:
-        base = base.where(ChessGame.eco == eco)
-        count_base = count_base.where(ChessGame.eco == eco)
+        conds.append(ChessGame.eco == eco)
     if result:
-        base = base.where(ChessGame.result == result)
-        count_base = count_base.where(ChessGame.result == result)
+        conds.append(ChessGame.result == result)
+    if opening:
+        conds.append(ChessGame.opening_name.ilike(f"%{opening}%"))
+    if event:
+        conds.append(ChessGame.event == event)
+    if site:
+        conds.append(ChessGame.site == site)
+    if themes:
+        conds.append(ChessGame.themes.contains(themes))
+    if source_game:
+        conds.append(ChessGame.source_game == source_game)
+    if analysis_status:
+        conds.append(ChessGame.analysis_status == analysis_status)
+    # ELO range matches games where BOTH players fall in the band.
+    if min_elo is not None:
+        conds.append(ChessGame.white_elo >= min_elo)
+        conds.append(ChessGame.black_elo >= min_elo)
+    if max_elo is not None:
+        conds.append(ChessGame.white_elo <= max_elo)
+        conds.append(ChessGame.black_elo <= max_elo)
+    if min_ply is not None:
+        conds.append(ChessGame.ply_count >= min_ply)
+    if max_ply is not None:
+        conds.append(ChessGame.ply_count <= max_ply)
+    if min_year is not None:
+        conds.append(ChessGame.played_year >= min_year)
+    if max_year is not None:
+        conds.append(ChessGame.played_year <= max_year)
+    if min_blunders is not None:
+        conds.append(ChessGame.blunder_count >= min_blunders)
+    if min_brilliants is not None:
+        conds.append(ChessGame.brilliant_count >= min_brilliants)
+    if named:
+        conds.append(and_(ChessGame.title.isnot(None), ChessGame.title != ""))
+    for c in conds:
+        base = base.where(c)
+        count_base = count_base.where(c)
 
     total = (await session.execute(count_base)).scalar() or 0
+    order = _GAME_SORTS.get(sort, _GAME_SORTS["recent"])
     offset = (max(page, 1) - 1) * page_size
-    stmt = base.order_by(ChessGame.created_at.desc()).offset(offset).limit(page_size)
+    stmt = base.order_by(*order).offset(offset).limit(page_size)
     rows = (await session.execute(stmt)).scalars().all()
     return list(rows), total
+
+
+async def game_facets(
+    session: AsyncSession, user: Employee, *, published_only: bool = True, drafts_only: bool = False,
+) -> dict:
+    """Aggregates that drive the game library's filter rail (scope + publish filtered)."""
+    allowed, clause = _scope_clause(ChessGame, user, "read")
+    if not allowed:
+        return {
+            "openings": [], "events": [], "sites": [], "results": [], "sources": [], "themes": [],
+            "white_elo": None, "ply": None, "year": None, "analyzed": {"done": 0, "pending": 0},
+        }
+
+    pub = published_only or not _can_coach(user)
+    only_drafts = drafts_only and not pub and _can_coach(user)
+
+    def _scoped(stmt):
+        if clause is not None:
+            stmt = stmt.where(clause)
+        if pub:
+            stmt = stmt.where(ChessGame.is_published.is_(True))
+        elif only_drafts:
+            stmt = stmt.where(ChessGame.is_published.is_(False))
+        return stmt
+
+    # Openings (by name), events, sites, results, sources.
+    async def _agg(col, limit, exclude_null=True):
+        stmt = _scoped(select(col, func.count().label("n")))
+        if exclude_null:
+            stmt = stmt.where(col.isnot(None), col != "")
+        stmt = stmt.group_by(col).order_by(func.count().desc()).limit(limit)
+        return [{"value": v, "count": n} for v, n in (await session.execute(stmt)).all()]
+
+    openings = await _agg(ChessGame.opening_name, 40)
+    events = await _agg(ChessGame.event, 40)
+    sites = await _agg(ChessGame.site, 40)
+    results = await _agg(ChessGame.result, 6)
+    sources = await _agg(ChessGame.source_game, 10, exclude_null=False)
+
+    theme_sub = _scoped(select(func.unnest(ChessGame.themes).label("theme"))).subquery()
+    theme_stmt = (
+        select(theme_sub.c.theme, func.count().label("n"))
+        .group_by(theme_sub.c.theme).order_by(func.count().desc()).limit(60)
+    )
+    themes = [{"value": t, "count": n} for t, n in (await session.execute(theme_stmt)).all()]
+
+    elo_row = (await session.execute(_scoped(
+        select(func.min(ChessGame.white_elo), func.max(ChessGame.white_elo))
+    ))).one()
+    ply_row = (await session.execute(_scoped(
+        select(func.min(ChessGame.ply_count), func.max(ChessGame.ply_count))
+    ))).one()
+    year_row = (await session.execute(_scoped(
+        select(func.min(ChessGame.played_year), func.max(ChessGame.played_year))
+    ))).one()
+    done = (await session.execute(_scoped(
+        select(func.count()).where(ChessGame.analysis_status == "done")
+    ))).scalar() or 0
+    total = (await session.execute(_scoped(select(func.count(ChessGame.id))))).scalar() or 0
+
+    return {
+        "openings": openings, "events": events, "sites": sites, "results": results,
+        "sources": sources, "themes": themes,
+        "white_elo": {"min": elo_row[0], "max": elo_row[1]},
+        "ply": {"min": ply_row[0], "max": ply_row[1]},
+        "year": {"min": year_row[0], "max": year_row[1]},
+        "analyzed": {"done": int(done), "pending": int(total) - int(done)},
+    }
+
+
+async def update_game(
+    session: AsyncSession,
+    game: ChessGame,
+    *,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    themes: Optional[list[str]] = None,
+    opening_name: Optional[str] = None,
+    is_published: Optional[bool] = None,
+) -> ChessGame:
+    """Patch curation fields. Slug stays stable so `[[game:<slug>]]` links never break."""
+    if title is not None:
+        game.title = title or None
+    if description is not None:
+        game.description = description or None
+    if themes is not None:
+        game.themes = themes
+    if opening_name is not None:
+        game.opening_name = opening_name or None
+    if is_published is not None:
+        game.is_published = is_published
+    await session.flush()
+    return game
 
 
 async def get_game(session: AsyncSession, game_id: uuid.UUID) -> Optional[ChessGame]:
@@ -531,15 +713,37 @@ def _cp(entry: dict) -> int:
     return 0
 
 
-def build_analysis_report(sans: list[str], evals: list[dict]) -> dict:
+_PIECE_VAL = {"p": 1, "n": 3, "b": 3, "r": 5, "q": 9}
+
+
+def _material_diff(fen: str) -> int:
+    """White material minus black material (in pawns), from a FEN placement field."""
+    placement = (fen or "").split(" ")[0]
+    score = 0
+    for ch in placement:
+        v = _PIECE_VAL.get(ch.lower())
+        if v is None:
+            continue
+        score += v if ch.isupper() else -v
+    return score
+
+
+def build_analysis_report(
+    sans: list[str], evals: list[dict], fens: Optional[list[str]] = None,
+) -> dict:
     """Turn per-position evals into an eval graph + per-move classification.
 
     A move's "loss" is how much the position worsened for the mover (capped),
     classified into blunder / mistake / inaccuracy / ok.
+
+    When `fens` (position before each move, plus the final) is supplied, a
+    best-effort "brilliant" (!!) heuristic also fires: a near-best move that
+    sacrifices material yet keeps the mover clearly winning. Brilliancy is hard
+    to judge exactly, so this is intentionally conservative.
     """
     cps = [_cp(e) for e in evals]
     moves = []
-    counts = {"blunder": 0, "mistake": 0, "inaccuracy": 0}
+    counts = {"blunder": 0, "mistake": 0, "inaccuracy": 0, "brilliant": 0}
     for i, san in enumerate(sans):
         before, after = cps[i], cps[i + 1]
         white_moved = i % 2 == 0
@@ -552,6 +756,15 @@ def build_analysis_report(sans: list[str], evals: list[dict]) -> dict:
             cls = "inaccuracy"
         else:
             cls = "ok"
+        # Brilliant (!!): near-best, sacrifices material, still clearly winning.
+        if cls == "ok" and fens and len(fens) > i + 1:
+            after_m = after if white_moved else -after
+            j = min(i + 2, len(fens) - 1)
+            sign = 1 if white_moved else -1
+            mat_before = _material_diff(fens[i]) * sign
+            mat_after = _material_diff(fens[j]) * sign
+            if after_m >= 150 and (mat_before - mat_after) >= 2:
+                cls = "brilliant"
         if cls in counts:
             counts[cls] += 1
         moves.append({

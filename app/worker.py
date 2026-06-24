@@ -1331,10 +1331,13 @@ async def analyze_game_task(ctx: dict, game_id: str):
             await session.commit()
             logger.warning(f"analyze_game_task: engine unavailable for {game_id}")
             return
-        game.analysis_json = chess_service.build_analysis_report(sans, evals)
+        report = chess_service.build_analysis_report(sans, evals, fens=fens)
+        game.analysis_json = report
+        game.blunder_count = int(report["summary"].get("blunder", 0))
+        game.brilliant_count = int(report["summary"].get("brilliant", 0))
         game.analysis_status = "done"
         await session.commit()
-        logger.info(f"analyze_game_task: {game_id} -> {game.analysis_json['summary']}")
+        logger.info(f"analyze_game_task: {game_id} -> {report['summary']}")
 
 
 async def import_lichess_puzzles_task(ctx: dict, job_id: str):

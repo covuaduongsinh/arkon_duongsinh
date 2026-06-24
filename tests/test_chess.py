@@ -284,6 +284,37 @@ def test_lichess_passes_filters():
     assert not passes_filters(_LICHESS_ROW, PuzzleImportFilters(opening="sicilian"))
 
 
+def test_parse_pgn_extracts_site_and_year():
+    pgn = (
+        '[Event "Test"]\n[Site "Hanoi VIE"]\n[Date "2021.05.03"]\n'
+        '[White "A"]\n[Black "B"]\n[Result "1-0"]\n\n1. e4 e5 2. Qh5 Nc6 1-0\n'
+    )
+    g = chess_service.parse_pgn(pgn)[0]
+    assert g["site"] == "Hanoi VIE"
+    assert g["played_year"] == 2021
+
+
+def test_material_diff_counts_pawns():
+    assert chess_service._material_diff(START_FEN) == 0
+    # White king + queen vs lone black king → +9 for White.
+    assert chess_service._material_diff("4k3/8/8/8/8/8/8/3QK3 w - - 0 1") == 9
+
+
+def test_build_analysis_report_brilliant_heuristic():
+    # White plays a near-best move that gives up the queen yet stays winning → "!!".
+    sans = ["Qxe8"]
+    evals = [{"eval_cp": 200, "mate": None, "best_move": None},
+             {"eval_cp": 250, "mate": None, "best_move": None}]
+    fens = ["4k3/8/8/8/8/8/8/3QK3 w - - 0 1", "4k3/8/8/8/8/8/8/4K3 b - - 0 1"]
+    rep = chess_service.build_analysis_report(sans, evals, fens=fens)
+    assert rep["summary"]["brilliant"] == 1
+    assert rep["moves"][0]["class"] == "brilliant"
+    # Without material sacrifice (queen stays on), it's just an ordinary move.
+    fens_nosac = ["4k3/8/8/8/8/8/8/3QK3 w - - 0 1", "4k3/8/8/8/8/8/8/3QK3 b - - 0 1"]
+    rep2 = chess_service.build_analysis_report(sans, evals, fens=fens_nosac)
+    assert rep2["summary"]["brilliant"] == 0
+
+
 def test_validate_filters_guards_unbounded_import():
     from app.services.puzzle_import_service import (
         MAX_IMPORT_LIMIT,
