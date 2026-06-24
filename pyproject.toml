@@ -55,6 +55,8 @@ dependencies = [
     "tabulate>=0.9",
     # Chess — PGN/FEN parsing & validation (chess module)
     "chess>=1.11.0",
+    # Lichess puzzle DB import — read .csv.zst dumps server-side
+    "zstandard>=0.22",
 ]
 
 [project.optional-dependencies]

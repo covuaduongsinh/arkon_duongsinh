@@ -6,19 +6,26 @@ playing requires chess:play; creating requires chess:create; publishing a
 puzzle requires chess:coach.
 """
 
+import os
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.database.models import ChessPuzzle, Employee
+from app.database.models import ChessPuzzle, ChessPuzzleImportJob, Employee
 from app.services import chess_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import require_permission
 from app.services.permission_engine import _get_user_permissions, can_access_chess
+from app.services.puzzle_import_service import (
+    OFFICIAL_LICHESS_PUZZLE_URL,
+    PuzzleImportFilters,
+    validate_filters,
+)
 
 router = APIRouter()
 
@@ -184,6 +191,135 @@ async def create_puzzle(
     await log_audit(db, user, "create", "chess_puzzle", str(puzzle.id))
     await db.commit()
     return PuzzleWithSolution(**_public(puzzle).model_dump(), solution_moves=puzzle.solution_moves)
+
+
+# ---------------------------------------------------------------------------
+# Lichess puzzle-DB import (coach-only). These literal routes MUST be declared
+# before the dynamic "/chess/puzzles/{puzzle_id}" route, otherwise a GET to
+# "/chess/puzzles/import" matches the {puzzle_id} route and 422s on UUID parse.
+# ---------------------------------------------------------------------------
+
+def _job_public(job: ChessPuzzleImportJob) -> dict:
+    return {
+        "id": str(job.id),
+        "source_kind": job.source_kind,
+        "status": job.status,
+        "rows_read": job.rows_read,
+        "inserted": job.inserted,
+        "skipped": job.skipped,
+        "positions_synced": job.positions_synced,
+        "error_message": job.error_message,
+        "params": job.params_json or {},
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+    }
+
+
+@router.post("/chess/puzzles/import")
+async def import_puzzles(
+    mode: str = Form("url"),
+    url: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    min_rating: Optional[int] = Form(None),
+    max_rating: Optional[int] = Form(None),
+    theme: Optional[str] = Form(None),
+    opening: Optional[str] = Form(None),
+    limit: Optional[int] = Form(None),
+    publish: bool = Form(False),
+    sync: bool = Form(True),
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:coach"),
+):
+    """Kick off a background Lichess puzzle-DB import from a URL or an uploaded file.
+
+    Imports land as global drafts (is_published=false) unless `publish=true`.
+    Returns the created import job; poll GET /chess/puzzles/import/{job_id} for progress.
+    """
+    mode = (mode or "url").lower()
+    if mode not in ("url", "upload"):
+        raise HTTPException(400, "mode phải là 'url' hoặc 'upload'")
+
+    theme = (theme or "").strip() or None
+    opening = (opening or "").strip() or None
+    filters = PuzzleImportFilters(
+        min_rating=min_rating, max_rating=max_rating, theme=theme, opening=opening, limit=limit,
+    )
+    try:
+        validate_filters(filters)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    source_ref: Optional[str] = None
+    if mode == "upload":
+        if file is None:
+            raise HTTPException(400, "Chế độ tải lên cần một tệp .csv hoặc .csv.zst")
+        fname = (file.filename or "").lower()
+        if not (fname.endswith(".csv") or fname.endswith(".zst")):
+            raise HTTPException(400, "Chỉ chấp nhận tệp .csv hoặc .csv.zst")
+        os.makedirs("temp_uploads", exist_ok=True)
+        suffix = ".csv.zst" if fname.endswith(".zst") else ".csv"
+        buffered = os.path.join("temp_uploads", f"puzzle-upload-{uuid.uuid4().hex}{suffix}")
+        # Stream the upload to disk in chunks — never load the whole dump into RAM.
+        with open(buffered, "wb") as out:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+        source_ref = buffered
+    else:  # url
+        source_ref = (url or "").strip() or OFFICIAL_LICHESS_PUZZLE_URL
+        if not source_ref.startswith(("http://", "https://")):
+            raise HTTPException(400, "URL không hợp lệ (phải bắt đầu bằng http:// hoặc https://)")
+
+    job = ChessPuzzleImportJob(
+        source_kind=mode,
+        source_ref=source_ref,
+        params_json={
+            "min_rating": min_rating, "max_rating": max_rating,
+            "theme": theme, "opening": opening, "limit": limit,
+            "publish": bool(publish), "sync": bool(sync),
+        },
+        status="pending",
+        created_by_id=user.id,
+    )
+    db.add(job)
+    await db.flush()
+    job_id = job.id
+    await log_audit(db, user, "import", "chess_puzzle_import_job", str(job_id))
+    await db.commit()
+    await db.refresh(job)
+
+    from app.worker import get_arq_pool
+    pool = await get_arq_pool()
+    await pool.enqueue_job("import_lichess_puzzles_task", str(job_id))
+
+    return _job_public(job)
+
+
+@router.get("/chess/puzzles/import")
+async def list_import_jobs(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:coach"),
+):
+    rows = (await db.execute(
+        select(ChessPuzzleImportJob).order_by(ChessPuzzleImportJob.created_at.desc()).limit(limit)
+    )).scalars().all()
+    return {"items": [_job_public(j) for j in rows]}
+
+
+@router.get("/chess/puzzles/import/{job_id}")
+async def get_import_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:coach"),
+):
+    job = await db.get(ChessPuzzleImportJob, job_id)
+    if not job:
+        raise HTTPException(404, "Không tìm thấy tác vụ nhập")
+    return _job_public(job)
 
 
 @router.get("/chess/puzzles/{puzzle_id}")

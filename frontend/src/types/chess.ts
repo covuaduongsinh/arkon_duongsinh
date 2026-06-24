@@ -86,6 +86,24 @@ export type PuzzleStats = {
   rating?: number;
 };
 
+export type PuzzleImportJobStatus =
+  | "pending" | "running" | "completed" | "failed" | "cancelled";
+
+export type PuzzleImportJob = {
+  id: string;
+  source_kind: "url" | "upload";
+  status: PuzzleImportJobStatus;
+  rows_read: number;
+  inserted: number;
+  skipped: number;
+  positions_synced: number;
+  error_message?: string | null;
+  params: Record<string, unknown>;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
 export type ChessPositionSource = "manual" | "game" | "puzzle";
 
 export type ChessPosition = {

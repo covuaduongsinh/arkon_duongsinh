@@ -208,3 +208,74 @@ def test_record_move_and_finish_scholars_mate():
     assert ended is True
     assert match.status == "finished"
     assert match.result == "1-0"
+
+
+# ── Lichess puzzle import — pure mapping/filter/validate (no DB) ──
+
+# One representative row as csv.DictReader would yield it (black to move FEN).
+_LICHESS_ROW = {
+    "PuzzleId": "00sHx",
+    "FEN": "q3k1nr/1pp1nQpp/3p4/1P2p3/4P3/B1PP1b2/B5PP/5K2 b k - 0 17",
+    "Moves": "e8d7 a2e6 d7d8 f7f8",
+    "Rating": "1760",
+    "RatingDeviation": "80",
+    "Popularity": "93",
+    "NbPlays": "1234",
+    "Themes": "mate mateIn2 middlegame short",
+    "GameUrl": "https://lichess.org/yyznGmXs/black#34",
+    "OpeningTags": "Italian_Game Italian_Game_Classical_Variation",
+}
+
+
+def test_lichess_row_to_values_maps_all_fields():
+    from app.services.puzzle_import_service import row_to_values
+
+    v = row_to_values(_LICHESS_ROW)
+    assert v is not None
+    assert v["slug"] == "lichess-00shx"  # lower-cased PuzzleId
+    assert v["lichess_id"] == "00sHx"
+    assert v["source"] == "lichess"
+    assert v["solution_moves"] == ["e8d7", "a2e6", "d7d8", "f7f8"]
+    assert v["themes"] == ["mate", "mateIn2", "middlegame", "short"]
+    assert v["side_to_move"] == "b"  # FEN has black to move
+    assert v["rating"] == 1760 and v["popularity"] == 93 and v["nb_plays"] == 1234
+    # OpeningTags → most-specific tag, unslugged.
+    assert v["opening_name"] == "Italian Game Classical Variation"
+    assert v["is_published"] is False
+    assert isinstance(v["piece_count"], int) and v["piece_count"] > 0
+
+
+def test_lichess_row_to_values_skips_blank_fen():
+    from app.services.puzzle_import_service import row_to_values
+
+    assert row_to_values({"PuzzleId": "x", "FEN": "  "}) is None
+
+
+def test_lichess_passes_filters():
+    from app.services.puzzle_import_service import PuzzleImportFilters, passes_filters
+
+    assert passes_filters(_LICHESS_ROW, PuzzleImportFilters(min_rating=1700, max_rating=1800))
+    assert not passes_filters(_LICHESS_ROW, PuzzleImportFilters(min_rating=1800))
+    assert not passes_filters(_LICHESS_ROW, PuzzleImportFilters(max_rating=1700))
+    assert passes_filters(_LICHESS_ROW, PuzzleImportFilters(theme="mateIn2"))
+    assert not passes_filters(_LICHESS_ROW, PuzzleImportFilters(theme="fork"))
+    assert passes_filters(_LICHESS_ROW, PuzzleImportFilters(opening="italian"))
+    assert not passes_filters(_LICHESS_ROW, PuzzleImportFilters(opening="sicilian"))
+
+
+def test_validate_filters_guards_unbounded_import():
+    from app.services.puzzle_import_service import (
+        MAX_IMPORT_LIMIT,
+        PuzzleImportFilters,
+        validate_filters,
+    )
+
+    # No filter and no limit → refuse (would import the whole ~5M dump).
+    with pytest.raises(ValueError):
+        validate_filters(PuzzleImportFilters())
+    # Over the hard cap → refuse.
+    with pytest.raises(ValueError):
+        validate_filters(PuzzleImportFilters(limit=MAX_IMPORT_LIMIT + 1))
+    # A rating filter alone is enough; a sane limit alone is enough.
+    validate_filters(PuzzleImportFilters(min_rating=1500))
+    validate_filters(PuzzleImportFilters(limit=5000))

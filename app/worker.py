@@ -1337,6 +1337,125 @@ async def analyze_game_task(ctx: dict, game_id: str):
         logger.info(f"analyze_game_task: {game_id} -> {game.analysis_json['summary']}")
 
 
+async def import_lichess_puzzles_task(ctx: dict, job_id: str):
+    """Background Lichess puzzle-DB import — URL fetch or buffered file upload.
+
+    Both sources resolve to a file on disk, then stream → filter → batch-insert
+    via puzzle_import_service. Progress (rows_read/inserted/skipped) is written to
+    the ChessPuzzleImportJob row in short side-sessions so the UI poll sees it live.
+    """
+    import os
+    from datetime import datetime, timezone
+
+    from app.database import async_session_factory
+    from app.database.models import ChessPuzzleImportJob
+    from app.services import chess_service
+    from app.services.puzzle_import_service import (
+        OFFICIAL_LICHESS_PUZZLE_URL,
+        PuzzleImportFilters,
+        download_to_temp,
+        import_from_path,
+    )
+
+    jid = uuid.UUID(job_id)
+    cleanup_path: Optional[str] = None  # only files we create/own get deleted
+
+    async with async_session_factory() as session:
+        job = await session.get(ChessPuzzleImportJob, jid)
+        if not job:
+            logger.warning(f"import_lichess_puzzles_task: job {job_id} not found")
+            return
+        params = job.params_json or {}
+        source_kind = job.source_kind
+        source_ref = job.source_ref
+        publish = bool(params.get("publish"))
+        do_sync = bool(params.get("sync"))
+        filters = PuzzleImportFilters(
+            min_rating=params.get("min_rating"),
+            max_rating=params.get("max_rating"),
+            theme=params.get("theme"),
+            opening=params.get("opening"),
+            limit=params.get("limit"),
+        )
+        job.status = "running"
+        job.started_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    async def _progress(rows_read: int, inserted: int) -> None:
+        async with async_session_factory() as s:
+            j = await s.get(ChessPuzzleImportJob, jid)
+            if j and j.status == "running":
+                j.rows_read = rows_read
+                j.inserted = inserted
+                j.skipped = max(0, rows_read - inserted)
+                await s.commit()
+
+    try:
+        if source_kind == "url":
+            url = source_ref or OFFICIAL_LICHESS_PUZZLE_URL
+            suffix = ".csv.zst" if url.endswith(".zst") else ".csv"
+            import_path = os.path.join("temp_uploads", f"lichess-{job_id}{suffix}")
+            await download_to_temp(url, import_path)
+            cleanup_path = import_path
+        else:  # upload — source_ref is the buffered temp file
+            import_path = source_ref or ""
+            cleanup_path = import_path
+            if not import_path or not os.path.exists(import_path):
+                raise FileNotFoundError(f"Uploaded file missing: {import_path!r}")
+
+        async with async_session_factory() as session:
+            stats = await import_from_path(
+                session, import_path, filters=filters, publish=publish,
+                on_progress=_progress,
+            )
+
+        positions_synced = 0
+        if do_sync:
+            async with async_session_factory() as session:
+                sync_stats = await chess_service.sync_positions_from_puzzles(
+                    session, scope_type="global", only_lichess=True,
+                )
+                await session.commit()
+                positions_synced = int(sync_stats.get("created", 0))
+
+        async with async_session_factory() as session:
+            job = await session.get(ChessPuzzleImportJob, jid)
+            if job:
+                job.rows_read = stats["rows_read"]
+                job.inserted = stats["inserted"]
+                job.skipped = stats["skipped"]
+                job.positions_synced = positions_synced
+                job.status = "completed"
+                job.finished_at = datetime.now(timezone.utc)
+                await session.commit()
+        logger.success(f"import_lichess_puzzles_task: job {job_id} done -> {stats}")
+
+    except BaseException as e:
+        logger.error(f"import_lichess_puzzles_task failed for {job_id}: {e}")
+        error_msg = str(e)[:500]
+
+        async def _mark_error() -> None:
+            async with async_session_factory() as s:
+                j = await s.get(ChessPuzzleImportJob, jid)
+                if j:
+                    j.status = "failed"
+                    j.error_message = error_msg
+                    j.finished_at = datetime.now(timezone.utc)
+                    await s.commit()
+
+        try:
+            await asyncio.shield(_mark_error())
+        except Exception:
+            pass
+        raise
+    finally:
+        if cleanup_path and os.path.exists(cleanup_path):
+            try:
+                os.remove(cleanup_path)
+            except Exception as ce:
+                logger.warning(f"import_lichess_puzzles_task: cleanup failed {cleanup_path}: {ce}")
+
+
 class WorkerSettings:
     """arq worker configuration."""
 
@@ -1350,6 +1469,9 @@ class WorkerSettings:
         reembed_all_pages_task,
         ai_pre_review_draft_task,
         arq_func(analyze_game_task, timeout=1800),
+        # Long, network/IO-bound; don't auto-retry (re-download + re-insert is wasteful
+        # and the buffered upload file is deleted on the first attempt's cleanup).
+        arq_func(import_lichess_puzzles_task, timeout=3600, max_tries=1),
     ]
     redis_settings = _get_redis_settings()
     max_jobs = settings.worker_max_jobs

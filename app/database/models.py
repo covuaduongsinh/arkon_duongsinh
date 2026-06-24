@@ -1481,6 +1481,40 @@ class ChessPuzzle(Base):
     )
 
 
+class ChessPuzzleImportJob(Base):
+    """Tracks a background Lichess puzzle-DB import (URL fetch or file upload)."""
+    __tablename__ = "chess_puzzle_import_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    source_kind: Mapped[str] = mapped_column(String(10), nullable=False)  # url | upload
+    # The fetch URL, or for uploads the buffered temp-file path + original name.
+    source_ref: Mapped[Optional[str]] = mapped_column(Text)
+    # Filters + publish/sync flags captured at enqueue time.
+    params_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending"
+    )  # pending | running | completed | failed | cancelled
+    rows_read: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    inserted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    positions_synced: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    created_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True,
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_chess_puzzle_import_jobs_status", "status", "created_at"),
+    )
+
+
 class ChessPuzzleAttempt(Base):
     """One student attempt at a puzzle — drives progress/scoring."""
     __tablename__ = "chess_puzzle_attempts"

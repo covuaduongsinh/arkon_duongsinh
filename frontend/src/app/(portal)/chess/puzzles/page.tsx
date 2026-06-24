@@ -126,6 +126,14 @@ export default function ChessPuzzlesPage() {
               </Button>
             </Link>
             {canCoach && (
+              <Link href="/chess/puzzles/import">
+                <Button variant="outline">
+                  <span className="material-symbols-outlined text-[18px]">cloud_download</span>
+                  Nhập từ Lichess
+                </Button>
+              </Link>
+            )}
+            {canCoach && (
               <Link href="/chess/puzzles/new">
                 <Button>
                   <span className="material-symbols-outlined text-[18px]">add</span>
