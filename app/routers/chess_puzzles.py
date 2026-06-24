@@ -35,6 +35,11 @@ class PuzzlePublic(BaseModel):
     side_to_move: str
     themes: list[str] = []
     rating: Optional[int] = None
+    popularity: Optional[int] = None
+    nb_plays: Optional[int] = None
+    piece_count: Optional[int] = None
+    opening_name: Optional[str] = None
+    source: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
     is_published: bool = False
@@ -52,7 +57,9 @@ class PuzzleWithSolution(PuzzlePublic):
 def _public(p: ChessPuzzle) -> PuzzlePublic:
     return PuzzlePublic(
         id=p.id, slug=p.slug, fen=p.fen, side_to_move=p.side_to_move, themes=p.themes or [],
-        rating=p.rating, title=p.title, description=p.description,
+        rating=p.rating, popularity=p.popularity, nb_plays=p.nb_plays,
+        piece_count=p.piece_count, opening_name=p.opening_name, source=p.source,
+        title=p.title, description=p.description,
         is_published=p.is_published, scope_type=p.scope_type, scope_id=p.scope_id,
         created_at=p.created_at.isoformat(),
     )
@@ -70,6 +77,15 @@ class CreatePuzzleBody(BaseModel):
     scope_id: Optional[uuid.UUID] = None
 
 
+class UpdatePuzzleBody(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    themes: Optional[list[str]] = None
+    rating: Optional[int] = None
+    opening_name: Optional[str] = None
+    is_published: Optional[bool] = None
+
+
 class AttemptBody(BaseModel):
     moves_played: list[str]
     time_ms: Optional[int] = None
@@ -84,16 +100,26 @@ class StepBody(BaseModel):
 @router.get("/chess/puzzles")
 async def list_puzzles(
     theme: Optional[str] = Query(None),
+    themes: Optional[list[str]] = Query(None),
+    search: Optional[str] = Query(None),
+    opening: Optional[str] = Query(None),
+    side: Optional[str] = Query(None),
     min_rating: Optional[int] = Query(None),
     max_rating: Optional[int] = Query(None),
+    min_pieces: Optional[int] = Query(None),
+    max_pieces: Optional[int] = Query(None),
+    source: Optional[str] = Query(None),
+    sort: str = Query("recent"),
     include_drafts: bool = Query(False),
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=200),
+    page_size: int = Query(24, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("chess:read"),
 ):
     puzzles, total = await chess_service.list_puzzles(
-        db, user, theme=theme, min_rating=min_rating, max_rating=max_rating,
+        db, user, theme=theme, themes=themes, search=search, opening=opening, side=side,
+        min_rating=min_rating, max_rating=max_rating,
+        min_pieces=min_pieces, max_pieces=max_pieces, source=source, sort=sort,
         published_only=not (include_drafts and _can_coach(user)),
         page=page, page_size=page_size,
     )
@@ -104,6 +130,17 @@ async def list_puzzles(
         "page_size": page_size,
         "total_pages": max(1, -(-total // page_size)),
     }
+
+
+@router.get("/chess/puzzles/facets")
+async def puzzle_facets(
+    include_drafts: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:read"),
+):
+    return await chess_service.puzzle_facets(
+        db, user, published_only=not (include_drafts and _can_coach(user)),
+    )
 
 
 @router.get("/chess/puzzles/next")
@@ -160,10 +197,55 @@ async def get_puzzle(
         raise HTTPException(404, "Puzzle not found")
     if not can_access_chess(user, puzzle, "read"):
         raise HTTPException(403, "Access denied")
+    # Drafts are visible to coaches only — hide their existence from solvers.
+    if not puzzle.is_published and not _can_coach(user):
+        raise HTTPException(404, "Puzzle not found")
     # Coaches see the solution; solvers don't.
     if _can_coach(user):
         return PuzzleWithSolution(**_public(puzzle).model_dump(), solution_moves=puzzle.solution_moves)
     return _public(puzzle)
+
+
+@router.patch("/chess/puzzles/{puzzle_id}")
+async def update_puzzle(
+    puzzle_id: uuid.UUID,
+    body: UpdatePuzzleBody,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:edit"),
+):
+    puzzle = await chess_service.get_puzzle(db, puzzle_id)
+    if not puzzle:
+        raise HTTPException(404, "Puzzle not found")
+    if not can_access_chess(user, puzzle, "edit"):
+        raise HTTPException(403, "Access denied")
+    # Publishing/unpublishing is a coach action (mirrors create gating).
+    if body.is_published is not None and body.is_published != puzzle.is_published and not _can_coach(user):
+        raise HTTPException(403, "Publishing puzzles requires chess:coach")
+    puzzle = await chess_service.update_puzzle(
+        db, puzzle,
+        title=body.title, description=body.description, themes=body.themes,
+        rating=body.rating, opening_name=body.opening_name, is_published=body.is_published,
+    )
+    await log_audit(db, user, "update", "chess_puzzle", str(puzzle.id))
+    await db.commit()
+    return PuzzleWithSolution(**_public(puzzle).model_dump(), solution_moves=puzzle.solution_moves)
+
+
+@router.delete("/chess/puzzles/{puzzle_id}")
+async def delete_puzzle(
+    puzzle_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:delete"),
+):
+    puzzle = await chess_service.get_puzzle(db, puzzle_id)
+    if not puzzle:
+        raise HTTPException(404, "Puzzle not found")
+    if not can_access_chess(user, puzzle, "delete"):
+        raise HTTPException(403, "Access denied")
+    await chess_service.delete_puzzle(db, puzzle)
+    await log_audit(db, user, "delete", "chess_puzzle", str(puzzle_id))
+    await db.commit()
+    return {"deleted": True}
 
 
 @router.post("/chess/puzzles/{puzzle_id}/step")
@@ -183,6 +265,8 @@ async def step_puzzle(
         raise HTTPException(404, "Puzzle not found")
     if not can_access_chess(user, puzzle, "read"):
         raise HTTPException(403, "Access denied")
+    if not puzzle.is_published and not _can_coach(user):
+        raise HTTPException(404, "Puzzle not found")
 
     result = chess_service.check_puzzle_step(puzzle.solution_moves, body.moves)
     if (not result["correct"]) or result["solved"]:
@@ -207,6 +291,8 @@ async def attempt_puzzle(
         raise HTTPException(404, "Puzzle not found")
     if not can_access_chess(user, puzzle, "read"):
         raise HTTPException(403, "Access denied")
+    if not puzzle.is_published and not _can_coach(user):
+        raise HTTPException(404, "Puzzle not found")
     attempt = await chess_service.record_attempt(
         db, user, puzzle,
         moves_played=body.moves_played, time_ms=body.time_ms, hints_used=body.hints_used,

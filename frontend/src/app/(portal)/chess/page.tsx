@@ -10,7 +10,7 @@ import type { PuzzleStats } from "@/types/chess";
 const TILES = [
   { href: "/chess/games", icon: "deployed_code", title: "Games", desc: "Browse and import the game database (PGN)." },
   { href: "/chess/analysis", icon: "neurology", title: "Analysis", desc: "Play out positions with the Stockfish engine." },
-  { href: "/chess/puzzles", icon: "extension", title: "Puzzles", desc: "Train tactics and track your progress." },
+  { href: "/chess/puzzles", icon: "extension", title: "Puzzles", desc: "Browse, filter, and solve the tactics library." },
   { href: "/chess/games/import", icon: "upload_file", title: "Import PGN", desc: "Add games from a .pgn file or pasted text." },
 ];
 

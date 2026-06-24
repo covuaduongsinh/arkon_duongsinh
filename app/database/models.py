@@ -1436,6 +1436,9 @@ class ChessPuzzle(Base):
     themes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     rating: Mapped[Optional[int]] = mapped_column(Integer)
     popularity: Mapped[Optional[int]] = mapped_column(Integer)
+    # Material count — number of pieces on the board (derived from FEN). Lets the
+    # library filter endgame puzzles (e.g. ≤7 pieces). Mirrors ChessPosition.
+    piece_count: Mapped[Optional[int]] = mapped_column(Integer)
     # Number of plays — Lichess NbPlays; NULL for hand-authored puzzles.
     nb_plays: Mapped[Optional[int]] = mapped_column(Integer)
     # Opening name from the source database (Lichess OpeningTags, spaced).
@@ -1471,6 +1474,7 @@ class ChessPuzzle(Base):
         Index("ix_chess_puzzles_scope", "scope_type", "scope_id"),
         Index("ix_chess_puzzles_rating", "rating"),
         Index("ix_chess_puzzles_published", "is_published"),
+        Index("ix_chess_puzzles_piece_count", "piece_count"),
         UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_puzzles_scope_slug"),
         # Dedupe Lichess re-imports; multiple NULLs stay distinct in Postgres.
         Index("uq_chess_puzzles_lichess_id", "lichess_id", unique=True),

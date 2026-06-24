@@ -50,6 +50,11 @@ export type ChessPuzzle = {
   side_to_move: "w" | "b";
   themes: string[];
   rating?: number | null;
+  popularity?: number | null;
+  nb_plays?: number | null;
+  piece_count?: number | null;
+  opening_name?: string | null;
+  source?: string | null;
   title?: string | null;
   description?: string | null;
   is_published: boolean;
@@ -58,6 +63,14 @@ export type ChessPuzzle = {
   created_at: string;
   // Present only for coaches / in attempt responses.
   solution_moves?: string[];
+};
+
+export type PuzzleFacets = {
+  themes: FacetCount[];
+  openings: FacetCount[];
+  sources: FacetCount[];
+  rating: { min: number | null; max: number | null } | null;
+  piece_count: { min: number | null; max: number | null } | null;
 };
 
 export type PuzzleAttemptResult = {

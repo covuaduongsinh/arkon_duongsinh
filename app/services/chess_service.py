@@ -884,13 +884,15 @@ async def create_puzzle(
     s_type, s_id = resolve_scope(user, scope_type, scope_id)
     taken = await _existing_slugs(session, ChessPuzzle, s_type, s_id)
     slug = _dedupe_slug(slugify(title, 80) or f"puzzle-{uuid.uuid4().hex[:8]}", taken)
+    piece_count, side = _fen_facts(norm_fen)
     puzzle = ChessPuzzle(
         fen=norm_fen,
         slug=slug,
         solution_moves=solution_moves,
-        side_to_move="w" if chess.Board(norm_fen).turn == chess.WHITE else "b",
+        side_to_move=side,
         themes=themes or [],
         rating=rating,
+        piece_count=piece_count,
         title=title,
         description=description,
         is_published=is_published,
@@ -903,16 +905,36 @@ async def create_puzzle(
     return puzzle
 
 
+# Sort keys → ORDER BY clause. NULLs last so unrated/unscored puzzles don't
+# crowd the top of rating/popularity views.
+_PUZZLE_SORTS = {
+    "recent": (ChessPuzzle.created_at.desc(),),
+    "popularity": (ChessPuzzle.popularity.desc().nulls_last(), ChessPuzzle.created_at.desc()),
+    "plays": (ChessPuzzle.nb_plays.desc().nulls_last(), ChessPuzzle.created_at.desc()),
+    "rating_asc": (ChessPuzzle.rating.asc().nulls_last(), ChessPuzzle.created_at.desc()),
+    "rating_desc": (ChessPuzzle.rating.desc().nulls_last(), ChessPuzzle.created_at.desc()),
+    "pieces_asc": (ChessPuzzle.piece_count.asc().nulls_last(), ChessPuzzle.created_at.desc()),
+}
+
+
 async def list_puzzles(
     session: AsyncSession,
     user: Employee,
     *,
     theme: Optional[str] = None,
+    themes: Optional[list[str]] = None,
+    search: Optional[str] = None,
+    opening: Optional[str] = None,
+    side: Optional[str] = None,
     min_rating: Optional[int] = None,
     max_rating: Optional[int] = None,
+    min_pieces: Optional[int] = None,
+    max_pieces: Optional[int] = None,
+    source: Optional[str] = None,
+    sort: str = "recent",
     published_only: bool = True,
     page: int = 1,
-    page_size: int = 20,
+    page_size: int = 24,
 ) -> tuple[list[ChessPuzzle], int]:
     allowed, clause = _scope_clause(ChessPuzzle, user, "read")
     if not allowed:
@@ -924,31 +946,133 @@ async def list_puzzles(
         base = base.where(clause)
         count_base = count_base.where(clause)
 
+    conds = []
     # Students only ever see published puzzles; coaches can opt to see drafts.
     if published_only or not _can_coach(user):
-        base = base.where(ChessPuzzle.is_published.is_(True))
-        count_base = count_base.where(ChessPuzzle.is_published.is_(True))
+        conds.append(ChessPuzzle.is_published.is_(True))
     if theme:
-        base = base.where(ChessPuzzle.themes.any(theme))
-        count_base = count_base.where(ChessPuzzle.themes.any(theme))
+        conds.append(ChessPuzzle.themes.any(theme))
+    if themes:
+        conds.append(ChessPuzzle.themes.contains(themes))
+    if search:
+        like = f"%{search}%"
+        conds.append(or_(
+            ChessPuzzle.title.ilike(like),
+            ChessPuzzle.description.ilike(like),
+            ChessPuzzle.opening_name.ilike(like),
+            ChessPuzzle.slug.ilike(like),
+        ))
+    if opening:
+        conds.append(ChessPuzzle.opening_name.ilike(f"%{opening}%"))
+    if side in ("w", "b"):
+        conds.append(ChessPuzzle.side_to_move == side)
     if min_rating is not None:
-        base = base.where(ChessPuzzle.rating >= min_rating)
-        count_base = count_base.where(ChessPuzzle.rating >= min_rating)
+        conds.append(ChessPuzzle.rating >= min_rating)
     if max_rating is not None:
-        base = base.where(ChessPuzzle.rating <= max_rating)
-        count_base = count_base.where(ChessPuzzle.rating <= max_rating)
+        conds.append(ChessPuzzle.rating <= max_rating)
+    if min_pieces is not None:
+        conds.append(ChessPuzzle.piece_count >= min_pieces)
+    if max_pieces is not None:
+        conds.append(ChessPuzzle.piece_count <= max_pieces)
+    if source:
+        conds.append(ChessPuzzle.source == source)
+    for c in conds:
+        base = base.where(c)
+        count_base = count_base.where(c)
 
     total = (await session.execute(count_base)).scalar() or 0
+    order = _PUZZLE_SORTS.get(sort, _PUZZLE_SORTS["recent"])
     offset = (max(page, 1) - 1) * page_size
-    stmt = base.order_by(ChessPuzzle.created_at.desc()).offset(offset).limit(page_size)
+    stmt = base.order_by(*order).offset(offset).limit(page_size)
     rows = (await session.execute(stmt)).scalars().all()
     return list(rows), total
+
+
+async def puzzle_facets(session: AsyncSession, user: Employee, *, published_only: bool = True) -> dict:
+    """Aggregates that drive the puzzle library's filter rail (scope + publish filtered)."""
+    allowed, clause = _scope_clause(ChessPuzzle, user, "read")
+    if not allowed:
+        return {"themes": [], "openings": [], "sources": [], "rating": None, "piece_count": None}
+
+    pub = published_only or not _can_coach(user)
+
+    def _scoped(stmt):
+        if clause is not None:
+            stmt = stmt.where(clause)
+        if pub:
+            stmt = stmt.where(ChessPuzzle.is_published.is_(True))
+        return stmt
+
+    theme_sub = _scoped(select(func.unnest(ChessPuzzle.themes).label("theme"))).subquery()
+    theme_stmt = (
+        select(theme_sub.c.theme, func.count().label("n"))
+        .group_by(theme_sub.c.theme).order_by(func.count().desc()).limit(60)
+    )
+    themes = [{"value": t, "count": n} for t, n in (await session.execute(theme_stmt)).all()]
+
+    open_stmt = (
+        _scoped(select(ChessPuzzle.opening_name, func.count().label("n")))
+        .where(ChessPuzzle.opening_name.isnot(None))
+        .group_by(ChessPuzzle.opening_name).order_by(func.count().desc()).limit(40)
+    )
+    openings = [{"value": o, "count": n} for o, n in (await session.execute(open_stmt)).all()]
+
+    src_stmt = _scoped(select(ChessPuzzle.source, func.count().label("n"))).group_by(ChessPuzzle.source)
+    sources = [{"value": s or "manual", "count": n} for s, n in (await session.execute(src_stmt)).all()]
+
+    rate_row = (await session.execute(
+        _scoped(select(func.min(ChessPuzzle.rating), func.max(ChessPuzzle.rating)))
+    )).one()
+    pc_row = (await session.execute(
+        _scoped(select(func.min(ChessPuzzle.piece_count), func.max(ChessPuzzle.piece_count)))
+    )).one()
+
+    return {
+        "themes": themes,
+        "openings": openings,
+        "sources": sources,
+        "rating": {"min": rate_row[0], "max": rate_row[1]} if rate_row[0] is not None else None,
+        "piece_count": {"min": pc_row[0], "max": pc_row[1]} if pc_row[0] is not None else None,
+    }
 
 
 async def get_puzzle(session: AsyncSession, puzzle_id: uuid.UUID) -> Optional[ChessPuzzle]:
     return (await session.execute(
         select(ChessPuzzle).where(ChessPuzzle.id == puzzle_id)
     )).scalar_one_or_none()
+
+
+async def update_puzzle(
+    session: AsyncSession,
+    puzzle: ChessPuzzle,
+    *,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    themes: Optional[list[str]] = None,
+    rating: Optional[int] = None,
+    opening_name: Optional[str] = None,
+    is_published: Optional[bool] = None,
+) -> ChessPuzzle:
+    """Patch curation fields. `slug` is left stable so `[[puzzle:<slug>]]`
+    wikilinks never break. `is_published` is gated by the caller (coach only)."""
+    if title is not None:
+        puzzle.title = title
+    if description is not None:
+        puzzle.description = description
+    if themes is not None:
+        puzzle.themes = themes
+    if rating is not None:
+        puzzle.rating = rating
+    if opening_name is not None:
+        puzzle.opening_name = opening_name
+    if is_published is not None:
+        puzzle.is_published = is_published
+    await session.flush()
+    return puzzle
+
+
+async def delete_puzzle(session: AsyncSession, puzzle: ChessPuzzle) -> None:
+    await session.delete(puzzle)
 
 
 async def get_next_puzzle(

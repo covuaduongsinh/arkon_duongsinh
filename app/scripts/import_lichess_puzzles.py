@@ -80,6 +80,7 @@ def _row_to_values(row: dict) -> dict | None:
         "slug": f"lichess-{pid.lower()}" if pid else None,
         "solution_moves": moves,
         "side_to_move": side,
+        "piece_count": piece_count,
         "themes": themes,
         "rating": _to_int(row.get("Rating")),
         "popularity": _to_int(row.get("Popularity")),

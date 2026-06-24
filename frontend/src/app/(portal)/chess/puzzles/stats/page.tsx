@@ -40,7 +40,7 @@ export default function ChessPuzzleStatsPage() {
       )}
 
       <div className="flex gap-3">
-        <Link href="/chess/puzzles" className="text-sm text-primary hover:underline">Solve puzzles →</Link>
+        <Link href="/chess/puzzles/train" className="text-sm text-primary hover:underline">Luyện tập →</Link>
         <Link href="/chess" className="text-sm text-muted-foreground hover:text-foreground">← Back to Chess</Link>
       </div>
     </>
