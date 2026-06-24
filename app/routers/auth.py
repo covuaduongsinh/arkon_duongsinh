@@ -117,7 +117,6 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     )
 
     permissions = get_effective_permissions(employee)
-    workspace_memberships = await _get_workspace_memberships(db, employee.id)
 
     return LoginResponse(
         access_token=token,
@@ -191,6 +190,7 @@ async def verify_email(req: VerifyEmailRequest, db: AsyncSession = Depends(get_d
     await db.commit()
     # Reload with departments eager-loaded for the user payload.
     from sqlalchemy.orm import selectinload
+
     from app.database.models import EmployeeDepartment
     full = (await db.execute(
         select(Employee)

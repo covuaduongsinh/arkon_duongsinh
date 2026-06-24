@@ -33,7 +33,6 @@ from app.database.models import (
     ChessLesson,
     ChessLessonLink,
     Employee,
-    WikiPage,
 )
 from app.services import chess_lms_service as lms
 from app.services import chess_service, wiki_service

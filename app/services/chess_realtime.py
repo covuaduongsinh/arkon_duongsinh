@@ -7,7 +7,6 @@ failures never break the REST request.
 """
 
 import json
-from typing import Optional
 
 from loguru import logger
 
@@ -34,13 +33,23 @@ def channel(match_id: str) -> str:
     return f"chess:match:{match_id}"
 
 
-async def publish_match(match_id: str, payload: dict) -> None:
-    """Publish a match state update. Best-effort."""
+async def _publish(match_id: str, envelope: dict) -> None:
+    """Publish a typed envelope to the match channel. Best-effort."""
     try:
         r = await _get_redis()
-        await r.publish(channel(match_id), json.dumps(payload, default=str))
+        await r.publish(channel(match_id), json.dumps(envelope, default=str))
     except Exception as e:  # never break the caller
         logger.warning(f"chess_realtime publish failed for {match_id}: {e}")
+
+
+async def publish_match(match_id: str, payload: dict) -> None:
+    """Publish a match state update (envelope type 'state'). Best-effort."""
+    await _publish(match_id, {"type": "state", "match": payload})
+
+
+async def publish_chat(match_id: str, message: dict) -> None:
+    """Publish a chat message (envelope type 'chat'). Best-effort."""
+    await _publish(match_id, {"type": "chat", "message": message})
 
 
 async def subscribe(match_id: str):

@@ -23,7 +23,6 @@ from typing import Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
-
 # Set inside _get_identity() once the token resolves to an Employee.
 # None when auth failed or the call happened before resolution.
 current_identity: ContextVar[Optional[Any]] = ContextVar(

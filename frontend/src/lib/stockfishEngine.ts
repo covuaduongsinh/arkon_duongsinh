@@ -17,6 +17,26 @@ const ENGINE_URL =
 
 type InfoCallback = (line: EngineLine) => void;
 
+/**
+ * Create the engine Web Worker. Same-origin assets load directly; a cross-origin
+ * URL (e.g. a CDN single-file Stockfish build) is wrapped in a tiny blob worker
+ * that `importScripts()` it — classic Workers can't be constructed from a
+ * cross-origin URL directly, but importScripts from a same-origin blob is
+ * allowed (the CDN must send permissive CORS headers).
+ */
+function createEngineWorker(url: string): Worker {
+  let crossOrigin = false;
+  try {
+    crossOrigin = new URL(url, window.location.href).origin !== window.location.origin;
+  } catch {
+    crossOrigin = false;
+  }
+  if (!crossOrigin) return new Worker(url);
+  const shim = `importScripts(${JSON.stringify(url)});`;
+  const blobUrl = URL.createObjectURL(new Blob([shim], { type: "application/javascript" }));
+  return new Worker(blobUrl);
+}
+
 function parseInfo(text: string): EngineLine | null {
   if (!text.startsWith("info") || !text.includes(" pv ")) return null;
   const tokens = text.split(/\s+/);
@@ -53,7 +73,7 @@ class StockfishEngine {
     if (this.booting) return this.booting;
     this.booting = new Promise<boolean>((resolve) => {
       try {
-        this.worker = new Worker(ENGINE_URL);
+        this.worker = createEngineWorker(ENGINE_URL);
       } catch {
         resolve(false);
         return;

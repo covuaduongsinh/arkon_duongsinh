@@ -12,10 +12,47 @@ from loguru import logger
 
 from app.config import settings
 from app.mcp.server import create_mcp_server
+from app.observability import init_sentry
+
+# Initialize error tracking as early as possible (no-op without SENTRY_DSN).
+init_sentry("api")
 
 # Create the MCP server and its HTTP app (lifespan must be composed with FastAPI)
 mcp_server = create_mcp_server()
 mcp_http_app = mcp_server.http_app(path="/", stateless_http=True)
+
+
+_INSECURE_DEFAULTS = {
+    "SECRET_KEY": ("secret_key", "change-me-to-a-random-secret-string"),
+    "MCP_TOKEN_PEPPER": ("mcp_token_pepper", "change-me-to-a-random-pepper"),
+    "DEFAULT_ADMIN_PASSWORD": ("default_admin_password", "admin123"),
+}
+
+
+def _enforce_secret_hardening():
+    """Warn (default) or refuse to start when secrets are still placeholders.
+
+    Default behavior is a loud warning so existing deployments keep booting.
+    Set REQUIRE_SECURE_SECRETS=true (after setting real SECRET_KEY /
+    MCP_TOKEN_PEPPER / DEFAULT_ADMIN_PASSWORD) to make insecure defaults fatal.
+    """
+    offenders = [
+        env_name
+        for env_name, (attr, placeholder) in _INSECURE_DEFAULTS.items()
+        if getattr(settings, attr) == placeholder
+    ]
+    if not offenders:
+        return
+    listed = ", ".join(offenders)
+    if settings.require_secure_secrets:
+        raise RuntimeError(
+            f"Refusing to start: these secrets are still at insecure default values: {listed}. "
+            "Set real values in the environment (or unset REQUIRE_SECURE_SECRETS for dev)."
+        )
+    logger.warning(
+        f"⚠️  INSECURE default secrets in use: {listed}. Set real values before production "
+        "and enable REQUIRE_SECURE_SECRETS=true to enforce."
+    )
 
 
 async def seed_default_admin():
@@ -63,6 +100,9 @@ async def lifespan(app: FastAPI):
     async with mcp_http_app.lifespan(app):
         logger.info("Starting Arkon API...")
 
+        # Fail fast on insecure default secrets (unless explicitly allowed).
+        _enforce_secret_hardening()
+
         # Ensure MinIO bucket exists
         try:
             from app.services.storage_service import storage_service
@@ -87,12 +127,6 @@ async def lifespan(app: FastAPI):
             await seed_chess_demo()
         except Exception as e:
             logger.warning(f"Could not seed chess demo content: {e}")
-
-        # Warn if sensitive defaults are unchanged
-        if settings.secret_key == "change-me-to-a-random-secret-string":
-            logger.warning("⚠️  SECRET_KEY is set to the default value — change it before deploying to production!")
-        if settings.default_admin_password == "admin123":
-            logger.warning("⚠️  DEFAULT_ADMIN_PASSWORD is 'admin123' — change the admin password after first login!")
 
         # MCP server ready
         logger.success("Arkon MCP Server ready at /mcp")
@@ -206,7 +240,6 @@ from app.routers import (  # noqa: E402
     notifications,
     oauth,
     rbac,
-
     skill_contributions,
     skills,
     sources,

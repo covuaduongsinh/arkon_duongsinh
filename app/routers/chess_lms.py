@@ -149,11 +149,11 @@ async def remove_member(class_id: uuid.UUID, employee_id: uuid.UUID, db: AsyncSe
 
 # ── Lessons ──
 
-def _lesson_dto(l: ChessLesson) -> dict:
+def _lesson_dto(lesson: ChessLesson) -> dict:
     return {
-        "id": str(l.id), "class_id": str(l.class_id), "title": l.title,
-        "content_md": l.content_md, "study_set_id": str(l.study_set_id) if l.study_set_id else None,
-        "wiki_slug": l.wiki_slug, "position": l.position, "created_at": l.created_at.isoformat(),
+        "id": str(lesson.id), "class_id": str(lesson.class_id), "title": lesson.title,
+        "content_md": lesson.content_md, "study_set_id": str(lesson.study_set_id) if lesson.study_set_id else None,
+        "wiki_slug": lesson.wiki_slug, "position": lesson.position, "created_at": lesson.created_at.isoformat(),
     }
 
 
@@ -161,7 +161,7 @@ def _lesson_dto(l: ChessLesson) -> dict:
 async def list_lessons(class_id: uuid.UUID, db: AsyncSession = Depends(get_db), user: Employee = require_permission("chess:read")):
     await _load_class_or_403(db, class_id, user)
     lessons = await lms.list_lessons(db, class_id)
-    return {"items": [{"id": str(l.id), "title": l.title, "position": l.position} for l in lessons]}
+    return {"items": [{"id": str(lesson.id), "title": lesson.title, "position": lesson.position} for lesson in lessons]}
 
 
 @router.post("/chess/classes/{class_id}/lessons")

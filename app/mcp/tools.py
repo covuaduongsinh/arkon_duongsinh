@@ -236,8 +236,8 @@ def register_tools(mcp: FastMCP):
 
         top_k = min(max(1, top_k), 50)
 
-        from app.config import settings
         from app.ai.registry import ProviderRegistry
+        from app.config import settings
         from app.database import async_session_factory
         from app.services import wiki_service
 
@@ -390,13 +390,12 @@ def register_tools(mcp: FastMCP):
             return err
         assert identity is not None
 
-        from app.database import async_session_factory
-        from app.services import wiki_service
 
-        import uuid as uuid_mod
         from sqlalchemy import select as sa_select
 
+        from app.database import async_session_factory
         from app.database.models import Department, WikiPage
+        from app.services import wiki_service
 
         async with async_session_factory() as session:
             # Try global → department.
@@ -715,6 +714,7 @@ def register_tools(mcp: FastMCP):
             Matched source documents, their matching page numbers, and highlighted context snippets.
         """
         import re
+
         from sqlalchemy import select
 
         from app.database import async_session_factory
@@ -1252,6 +1252,7 @@ def register_tools(mcp: FastMCP):
 
         async with async_session_factory() as session:
             from sqlalchemy import select
+
             from app.database.models import WikiPage
 
             if scope_type:

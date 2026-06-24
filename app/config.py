@@ -42,6 +42,15 @@ class Settings(BaseSettings):
             "Rotating this invalidates every existing token — set once and keep stable."
         ),
     )
+    require_secure_secrets: bool = Field(
+        default=False,
+        description=(
+            "Opt-in hardening. When False (default), placeholder SECRET_KEY / "
+            "MCP_TOKEN_PEPPER / DEFAULT_ADMIN_PASSWORD only log a loud warning so "
+            "existing deployments keep booting. Set True (after setting real "
+            "secrets) to make the app REFUSE to start with insecure defaults."
+        ),
+    )
 
     # --- MinIO ---
     minio_endpoint: str = Field(default="localhost:9000")
@@ -56,6 +65,20 @@ class Settings(BaseSettings):
     minio_bucket: str = Field(default="arkon-files")
     minio_secure: bool = Field(default=False)
     minio_presign_expiry_hours: int = Field(default=24)
+
+    # --- Error tracking (Sentry) ---
+    sentry_dsn: str = Field(
+        default="",
+        description="Sentry DSN for backend + worker error tracking. Empty disables Sentry.",
+    )
+    sentry_environment: str = Field(
+        default="production",
+        description="Environment tag reported to Sentry (e.g. production, staging, dev).",
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.0,
+        description="Sentry performance tracing sample rate (0.0–1.0). 0 disables tracing.",
+    )
 
     # --- CORS ---
     cors_origins: str = Field(default="*")

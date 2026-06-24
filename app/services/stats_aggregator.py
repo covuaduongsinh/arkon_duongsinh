@@ -18,14 +18,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 import string
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 from loguru import logger
-from sqlalchemy import and_, distinct, func, not_, select
+from sqlalchemy import and_, distinct, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,7 +40,6 @@ from app.database.models import (
     WikiPageDraft,
     WikiPageRevision,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -119,7 +119,12 @@ async def run_async_checks(draft_id: str, expected_round: Optional[int] = None) 
     our stale verdict — a newer job is already queued for the new content.
     """
     from app.database import async_session_factory
-    from app.services.ai_review import llm_checks, regex_checks, semantic_checks, structural_checks
+    from app.services.ai_review import (
+        llm_checks,
+        regex_checks,
+        semantic_checks,
+        structural_checks,
+    )
 
     try:
         did = uuid.UUID(draft_id)

@@ -40,6 +40,8 @@ async def match_ws(websocket: WebSocket, match_id: uuid.UUID, token: str = Query
             await websocket.close(code=4403)
             return
         initial = chess_match_service.serialize_match(match)
+        sender_id = str(emp.id)
+        sender_name = emp.name
 
     await websocket.accept()
     await websocket.send_json({"type": "state", "match": initial})
@@ -58,16 +60,35 @@ async def match_ws(websocket: WebSocket, match_id: uuid.UUID, token: str = Query
         async for msg in ps.listen():
             if msg.get("type") == "message":
                 try:
-                    data = json.loads(msg["data"])
+                    envelope = json.loads(msg["data"])
                 except (ValueError, TypeError):
                     continue
-                await websocket.send_json({"type": "state", "match": data})
+                # Envelopes are already typed ('state' | 'chat'); relay as-is.
+                # Tolerate legacy bare-match payloads (no 'type') as state.
+                if "type" not in envelope:
+                    envelope = {"type": "state", "match": envelope}
+                await websocket.send_json(envelope)
 
     async def reader():
-        # Drain incoming frames to detect disconnects (clients don't send moves).
+        # Incoming frames carry chat messages; moves still go via REST. Unknown
+        # frames are ignored. Receiving also lets us detect disconnects.
+        import time as _time
         try:
             while True:
-                await websocket.receive_text()
+                raw = await websocket.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue
+                if msg.get("type") == "chat":
+                    text = str(msg.get("text", "")).strip()[:500]
+                    if text:
+                        await chess_realtime.publish_chat(str(match_id), {
+                            "sender_id": sender_id,
+                            "sender_name": sender_name,
+                            "text": text,
+                            "ts": _time.time(),
+                        })
         except WebSocketDisconnect:
             return
 

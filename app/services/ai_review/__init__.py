@@ -11,9 +11,9 @@ The output JSON shape is documented in `runner.py`.
 """
 
 from app.services.ai_review.runner import (  # noqa: F401
-    CheckResult,
     AiReviewResults,
-    run_sync_checks,
-    run_async_checks,
+    CheckResult,
     merge_results,
+    run_async_checks,
+    run_sync_checks,
 )

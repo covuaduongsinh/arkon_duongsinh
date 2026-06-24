@@ -56,10 +56,24 @@ REVIEWER_TOOLS = {
 DIRECT_WRITE_TOOLS = {
     "edit_wiki_page",
     "create_wiki_page",
+    "move_wiki_page",
+}
+
+# Chess read tools — gated by CAN_READ_CHESS (see app/mcp/chess_tools.py).
+# No non-admin identity in these tests carries a chess permission, so this tier
+# is effectively admin-only here.
+CHESS_TOOLS = {
+    "search_chess_games",
+    "get_chess_game",
+    "get_chess_puzzle",
+    "analyze_position",
+    "explain_opening",
 }
 
 # `create_wiki_page` / `edit_wiki_page` ride the reviewer ladder
 # (see CAN_CREATE_WIKI_DIRECT = CAN_REVIEW_WIKI in app/mcp/permissions.py).
+# ALL_TOOLS is the non-chess universe — the surface a wiki:write:all reviewer
+# sees. Admin additionally sees CHESS_TOOLS (see test_admin_sees_every_tool).
 ALL_TOOLS = PUBLIC_TOOLS | CONTRIBUTOR_TOOLS | REVIEWER_TOOLS | DIRECT_WRITE_TOOLS
 
 
@@ -100,7 +114,7 @@ async def _visible(mcp) -> set[str]:
 async def test_admin_sees_every_tool(monkeypatch):
     mcp = create_mcp_server()
     _stub_identity(monkeypatch, _identity(is_admin=True))
-    assert await _visible(mcp) == ALL_TOOLS
+    assert await _visible(mcp) == ALL_TOOLS | CHESS_TOOLS
 
 
 @pytest.mark.asyncio

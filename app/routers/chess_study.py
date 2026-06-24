@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import ChessStudyItem, ChessStudySet, Employee
 from app.database import get_db
+from app.database.models import ChessStudySet, Employee
 from app.services import chess_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import require_permission

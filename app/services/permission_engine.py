@@ -15,7 +15,6 @@ Workspace Realm:
   - Workspace role (viewer/contributor/editor/admin) determines actions within workspace.
 """
 
-import uuid
 from typing import Optional
 
 from sqlalchemy import select

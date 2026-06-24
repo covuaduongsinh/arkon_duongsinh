@@ -11,9 +11,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
-from sqlalchemy import and_, or_, func, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.database.models import (
@@ -626,7 +626,7 @@ async def list_all_drafts(
         # Exclude drafts that belong to unsubmitted branches
         from app.database.models import WikiBranch
         stmt = stmt.outerjoin(WikiBranch, WikiBranch.id == WikiPageDraft.branch_id)
-        stmt = stmt.where(or_(WikiPageDraft.branch_id == None, WikiBranch.status == "pending_merge"))
+        stmt = stmt.where(or_(WikiPageDraft.branch_id.is_(None), WikiBranch.status == "pending_merge"))
 
         page_filter = _build_reviewable_page_filter(user)
         if page_filter is False:  # noqa: E712 — never true, kept for symmetry

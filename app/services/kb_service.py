@@ -271,6 +271,7 @@ async def _extract_text_from_file(
     if ext in ("xlsx", "xls", "csv"):
         try:
             import io
+
             import pandas as pd
 
             pages_data = []

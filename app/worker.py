@@ -1007,7 +1007,7 @@ async def sweep_stuck_ai_review_cron(ctx: dict):
     """
     from datetime import datetime, timedelta, timezone
 
-    from sqlalchemy import or_, select, update
+    from sqlalchemy import or_, update
 
     from app.database import async_session_factory
     from app.database.models import WikiPageDraft
@@ -1497,6 +1497,8 @@ class WorkerSettings:
 
     @staticmethod
     async def on_startup(ctx: dict):
+        from app.observability import init_sentry
+        init_sentry("worker")
         logger.info("arq worker started — listening for ingestion jobs...")
 
     @staticmethod
@@ -1522,6 +1524,8 @@ class SkillWorkerSettings:
 
     @staticmethod
     async def on_startup(ctx: dict):
+        from app.observability import init_sentry
+        init_sentry("worker")
         logger.info("arq skills worker started — listening for skill jobs...")
 
     @staticmethod

@@ -174,7 +174,7 @@ export function WikiCreatePageDialog({
         onOpenChange(false);
         // Drafts land in the reviewer queue — no page exists yet. Just close.
         // The user will get a notification when it is approved.
-        // eslint-disable-next-line no-console
+         
         console.info("Draft submitted:", draft.id);
       }
     } catch (err) {

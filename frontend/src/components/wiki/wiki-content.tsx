@@ -388,7 +388,7 @@ export function WikiContent({
               }
               if (!srcStr.startsWith("image://")) {
                 // External / regular image — render as-is.
-                // eslint-disable-next-line @next/next/no-img-element
+                 
                 return (
                   <img
                     src={srcStr}

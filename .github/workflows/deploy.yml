@@ -1,10 +1,13 @@
 name: Deploy to production
 
-# Auto-deploy: every push to `main` (or manual run) SSHes into the prod
-# server and runs deploy/remote-deploy.sh. Mirrors the manual recipe:
-#   push main → ssh root@<host> → git pull → docker compose up -d --build
+# Gated auto-deploy: runs only after the CI workflow succeeds on `main`
+# (lint + tests + migration check + frontend build). A red CI never deploys.
+# `workflow_dispatch` still allows a manual deploy when needed.
+#   CI green on main → ssh root@<host> → git pull → docker compose up -d --build
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -16,6 +19,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Manual runs always proceed; auto runs only when the triggering CI passed.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

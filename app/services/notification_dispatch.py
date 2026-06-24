@@ -37,7 +37,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import Employee, Notification
 from app.services.config_service import ConfigService
 
-
 # ---------------------------------------------------------------------------
 # Public entry
 # ---------------------------------------------------------------------------
@@ -135,8 +134,9 @@ async def _send_smtp(
     from_addr: str, to_addr: str, subject: str, body: str, use_tls: bool,
 ) -> None:
     """Send a plain-text email via aiosmtplib."""
-    import aiosmtplib
     from email.message import EmailMessage
+
+    import aiosmtplib
 
     msg = EmailMessage()
     msg["From"] = from_addr

@@ -33,7 +33,6 @@ from app.database.models import (
 from app.services.permission_engine import build_chess_filter
 from app.utils.text import slugify
 
-
 # ---------------------------------------------------------------------------
 # Scope helpers
 # ---------------------------------------------------------------------------
@@ -268,7 +267,10 @@ async def chess_backlinks(session: AsyncSession, user: Employee, ns: str, entity
     Matches both the slug token (`game:<slug>`) and the UUID token
     (`game:<uuid>`) so references authored either way are caught."""
     from app.database.models import (
-        ChessLesson, ChessLessonLink, WikiLink, WikiPage,
+        ChessLesson,
+        ChessLessonLink,
+        WikiLink,
+        WikiPage,
     )
 
     row = await _fetch_chess_entity(session, user, ns, str(entity_id))

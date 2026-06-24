@@ -11,7 +11,6 @@ All endpoints require the `org:backup:manage` permission (admins always have it)
 
 import os
 import tempfile
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile

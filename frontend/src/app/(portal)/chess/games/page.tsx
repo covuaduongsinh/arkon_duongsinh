@@ -194,6 +194,25 @@ export default function ChessGamesPage() {
     }
   }
 
+  async function bulkAnalyze() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    try {
+      const r = await api<{ queued: number; skipped: number }>(
+        "/api/chess/games/bulk-analyze", { method: "POST", body: { ids } },
+      );
+      // Reflect the queued state immediately so the analysis column updates.
+      setGames((prev) => prev.map((g) => (ids.includes(g.id) && g.analysis_status === "none"
+        ? { ...g, analysis_status: "queued" } : g)));
+      if (r.queued > 0) alert(`Đã xếp hàng phân tích ${r.queued} ván${r.skipped ? ` (bỏ qua ${r.skipped})` : ""}.`);
+    } catch {
+      /* ignore */
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -304,6 +323,10 @@ export default function ChessGamesPage() {
             <button onClick={() => setSelected(new Set())} className="text-muted-foreground hover:underline">Bỏ chọn</button>
           )}
           <div className="ml-auto flex gap-2">
+            <Button size="sm" variant="outline" disabled={selected.size === 0 || bulkBusy} onClick={bulkAnalyze}>
+              <span className="material-symbols-outlined text-[16px]">neurology</span>
+              Phân tích đã chọn
+            </Button>
             <Button size="sm" disabled={selected.size === 0 || bulkBusy} onClick={() => bulkPublish(true)}>Xuất bản đã chọn</Button>
             <Button size="sm" variant="outline" disabled={selected.size === 0 || bulkBusy} onClick={() => bulkPublish(false)}>Ẩn đã chọn</Button>
           </div>
@@ -369,6 +392,7 @@ export default function ChessGamesPage() {
                 <th className="px-3 py-2 font-medium">{t("Opening")}</th>
                 <th className="px-3 py-2 font-medium">{t("Date")}</th>
                 <th className="px-3 py-2 font-medium">{t("Moves")}</th>
+                <th className="px-3 py-2 font-medium">Phân tích</th>
                 {canCoach && <th className="px-3 py-2 font-medium" />}
               </tr>
             </thead>
@@ -389,6 +413,7 @@ export default function ChessGamesPage() {
                   <td className="px-3 py-2 text-muted-foreground">{g.eco ? `${g.eco} ` : ""}{g.opening_name || ""}</td>
                   <td className="px-3 py-2 text-muted-foreground">{g.played_at || "—"}</td>
                   <td className="px-3 py-2 tabular-nums text-muted-foreground">{Math.ceil(g.ply_count / 2)}</td>
+                  <td className="px-3 py-2"><AnalysisBadge g={g} /></td>
                   {canCoach && (
                     <td className="px-3 py-2">
                       <Button variant="outline" size="sm" onClick={() => togglePublishOne(g)}>
@@ -414,6 +439,25 @@ export default function ChessGamesPage() {
       <Link href="/chess" className="text-sm text-muted-foreground hover:text-foreground">{t("Back to Chess")}</Link>
     </>
   );
+}
+
+function AnalysisBadge({ g }: { g: ChessGameSummary }) {
+  if (g.analysis_status === "queued" || g.analysis_status === "running") {
+    return <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[11px] text-blue-800">Đang phân tích…</span>;
+  }
+  if (g.analysis_status === "error") {
+    return <span className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] text-red-800">Lỗi</span>;
+  }
+  if (g.analysis_status === "done") {
+    return (
+      <span className="flex items-center gap-1 text-[11px] tabular-nums">
+        {(g.brilliant_count ?? 0) > 0 && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800">!! {g.brilliant_count}</span>}
+        {(g.blunder_count ?? 0) > 0 && <span className="rounded bg-red-100 px-1.5 py-0.5 text-red-800">?? {g.blunder_count}</span>}
+        {(g.brilliant_count ?? 0) === 0 && (g.blunder_count ?? 0) === 0 && <span className="text-muted-foreground">✓</span>}
+      </span>
+    );
+  }
+  return <span className="text-[11px] text-muted-foreground/60">—</span>;
 }
 
 function FilterSelect({

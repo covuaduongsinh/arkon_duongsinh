@@ -6,8 +6,6 @@ Pure predicate tests over fabricated ResolvedIdentity values — no DB.
 
 import uuid
 
-import pytest
-
 from app.mcp.permissions import (
     ANY_AUTHENTICATED,
     CAN_CONTRIBUTE_WIKI,

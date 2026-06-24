@@ -9,8 +9,8 @@ import types
 import pytest
 
 from app.database.models import ChessMatch, Employee
-from app.services import chess_service
 from app.services import chess_match_service as ms
+from app.services import chess_service
 from app.services import permissions as perms
 from app.services.permission_engine import build_chess_filter, can_access_chess
 

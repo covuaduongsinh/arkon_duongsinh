@@ -23,7 +23,6 @@ from app.database.models import (
     Employee,
 )
 
-
 # ── Classes & roster ──
 
 async def create_class(session: AsyncSession, user: Employee, *, name: str, description: Optional[str] = None) -> ChessClass:

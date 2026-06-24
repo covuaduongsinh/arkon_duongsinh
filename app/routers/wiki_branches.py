@@ -9,17 +9,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
 from sqlalchemy import and_, func, select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.database.models import (
     Employee,
     WikiBranch,
-    WikiPageDraft,
     WikiPage,
-    Department,
+    WikiPageDraft,
 )
+from app.routers.wiki_drafts import DraftResponse, _draft_response
 from app.services import wiki_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import get_current_user
@@ -27,7 +26,6 @@ from app.services.permission_engine import (
     _get_user_permissions,
     has_any_permission,
 )
-from app.routers.wiki_drafts import DraftResponse, _draft_response
 
 router = APIRouter()
 
@@ -299,13 +297,13 @@ async def close_branch(
         raise HTTPException(403, "Bạn không có quyền đóng hoặc hủy nhánh này")
 
     if branch.status in ("merged", "closed"):
-        raise HTTPException(400, f"Nhánh đã đóng hoặc đã được hợp nhất")
+        raise HTTPException(400, "Nhánh đã đóng hoặc đã được hợp nhất")
 
     # Withdraw all drafts
     stmt = select(WikiPageDraft).where(WikiPageDraft.branch_id == branch_id)
     drafts = (await db.execute(stmt)).scalars().all()
 
-    from app.services.contribution_service import withdraw, wiki_draft_adapter
+    from app.services.contribution_service import wiki_draft_adapter, withdraw
     for d in drafts:
         if d.status in ("pending", "needs_revision"):
             await withdraw(db, wiki_draft_adapter, d, user)
@@ -366,7 +364,10 @@ async def merge_branch(
                     reviewer_note=body.reviewer_note,
                 )
                 # Fire approved notifications
-                from app.services.contribution_service import notify_approved, wiki_draft_adapter
+                from app.services.contribution_service import (
+                    notify_approved,
+                    wiki_draft_adapter,
+                )
                 await notify_approved(db, wiki_draft_adapter, d, user)
 
             branch.status = "merged"

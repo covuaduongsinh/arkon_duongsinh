@@ -1304,7 +1304,6 @@ async def regenerate_hot_cache(
       - Any detected and unresolved contradictions (pages containing `[!contradiction]`).
     It calls the active LLM to compile this into a dense, high-value briefing.
     """
-    from app.ai.registry import ProviderRegistry
 
     # 1. Fetch recent pages
     recent_stmt = (

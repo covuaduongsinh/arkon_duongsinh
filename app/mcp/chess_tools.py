@@ -56,6 +56,7 @@ def register_chess_tools(mcp: FastMCP):
         top_k = min(max(1, top_k), 50)
 
         from sqlalchemy import or_, select
+
         from app.database import async_session_factory
         from app.database.models import ChessGame
 
@@ -105,7 +106,9 @@ def register_chess_tools(mcp: FastMCP):
         assert identity is not None
 
         import uuid as uuid_mod
+
         from sqlalchemy import select
+
         from app.database import async_session_factory
         from app.database.models import ChessGame
 
@@ -150,6 +153,7 @@ def register_chess_tools(mcp: FastMCP):
         assert identity is not None
 
         from sqlalchemy import func, select
+
         from app.database import async_session_factory
         from app.database.models import ChessPuzzle
 

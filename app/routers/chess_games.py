@@ -18,8 +18,12 @@ from app.services import chess_service
 from app.services.audit_service import log_audit
 from app.services.auth_service import require_permission
 from app.services.permission_engine import _get_user_permissions, can_access_chess
+from app.utils.rate_limit import check_rate_limit
 
 router = APIRouter()
+
+# Cap PGN payloads so a single import can't exhaust memory / the parser.
+MAX_PGN_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 def _can_coach(user: Employee) -> bool:
@@ -181,6 +185,42 @@ async def bulk_publish_games(
     return {"updated": updated, "skipped": skipped}
 
 
+@router.post("/chess/games/bulk-analyze")
+async def bulk_analyze_games(
+    body: BulkPublishBody,
+    db: AsyncSession = Depends(get_db),
+    user: Employee = require_permission("chess:coach"),
+):
+    """Enqueue whole-game engine analysis for many games at once (coach).
+
+    Skips games the user can't edit and games already queued/running. Declared
+    before the dynamic "/chess/games/{game_id}" route so the literal path wins.
+    """
+    if not body.ids:
+        return {"queued": 0, "skipped": 0}
+    if len(body.ids) > 500:
+        raise HTTPException(400, "Tối đa 500 ván mỗi lần")
+    if not await check_rate_limit(f"chess_bulk_analyze:{user.id}", 10, 60):
+        raise HTTPException(429, "Quá nhiều lượt phân tích hàng loạt — thử lại sau ít phút.")
+    games = (await db.execute(select(ChessGame).where(ChessGame.id.in_(body.ids)))).scalars().all()
+    to_queue = []
+    skipped = 0
+    for g in games:
+        if not can_access_chess(user, g, "edit") or g.analysis_status in ("queued", "running"):
+            skipped += 1
+            continue
+        g.analysis_status = "queued"
+        to_queue.append(g.id)
+    await db.commit()
+
+    if to_queue:
+        from app.worker import get_arq_pool
+        pool = await get_arq_pool()
+        for gid in to_queue:
+            await pool.enqueue_job("analyze_game_task", str(gid))
+    return {"queued": len(to_queue), "skipped": skipped}
+
+
 @router.post("/chess/games/import")
 async def import_games(
     file: Optional[UploadFile] = File(None),
@@ -192,15 +232,21 @@ async def import_games(
     user: Employee = require_permission("chess:create"),
 ):
     """Import one or more games from an uploaded .pgn file or pasted PGN text."""
+    if not await check_rate_limit(f"chess_import:{user.id}", 30, 60):
+        raise HTTPException(429, "Quá nhiều lượt nhập PGN — thử lại sau ít phút.")
     text = pgn
     if file is not None:
         raw = await file.read()
+        if len(raw) > MAX_PGN_BYTES:
+            raise HTTPException(413, "Tệp PGN quá lớn (tối đa 5 MB).")
         try:
             text = raw.decode("utf-8", errors="replace")
         except Exception as e:
             raise HTTPException(400, f"Could not read PGN file: {e}")
     if not text or not text.strip():
         raise HTTPException(400, "Provide a PGN file or PGN text")
+    if len(text.encode("utf-8")) > MAX_PGN_BYTES:
+        raise HTTPException(413, "PGN quá lớn (tối đa 5 MB).")
 
     slugs = [s.strip() for s in knowledge_type_slugs.split(",")] if knowledge_type_slugs else []
     slugs = [s for s in slugs if s]

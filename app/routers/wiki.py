@@ -774,7 +774,8 @@ async def get_wiki_graph(
         return await wiki_service.get_neighborhood(db, slug, depth=depth)
 
     # Full graph — paginated, with scope filtering
-    from sqlalchemy import case, func as sqlfunc
+    from sqlalchemy import case
+    from sqlalchemy import func as sqlfunc
 
     from app.database.models import Department, WikiLink
 
