@@ -39,7 +39,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from app.database import async_session_factory
+from app.database import async_session_factory, engine
 from app.database.models import Department, Employee, EmployeeDepartment
 from app.main import app
 from app.services.auth_service import audience_for, create_access_token, hash_password
@@ -51,6 +51,17 @@ def _schema():
     # Same command the CI `migrations` job runs; alembic reads DATABASE_URL.
     subprocess.run(["alembic", "upgrade", "head"], check=True)
     yield
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _dispose_engine():
+    """pytest-asyncio runs each test in its own event loop. The module-level
+    async engine pools connections bound to whichever loop created them, so
+    reusing the pool in a later test raises "attached to a different loop".
+    Dispose after each test (on that test's loop) so the next test gets fresh
+    connections."""
+    yield
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture
