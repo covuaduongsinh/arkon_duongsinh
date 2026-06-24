@@ -121,16 +121,19 @@ async def list_puzzles(
     source: Optional[str] = Query(None),
     sort: str = Query("recent"),
     include_drafts: bool = Query(False),
+    drafts_only: bool = Query(False),
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("chess:read"),
 ):
+    can_coach = _can_coach(user)
+    show_drafts = (include_drafts or drafts_only) and can_coach  # drop the "published only" filter
     puzzles, total = await chess_service.list_puzzles(
         db, user, theme=theme, themes=themes, search=search, opening=opening, side=side,
         min_rating=min_rating, max_rating=max_rating,
         min_pieces=min_pieces, max_pieces=max_pieces, source=source, sort=sort,
-        published_only=not (include_drafts and _can_coach(user)),
+        published_only=not show_drafts, drafts_only=(drafts_only and can_coach),
         page=page, page_size=page_size,
     )
     return {
@@ -145,11 +148,14 @@ async def list_puzzles(
 @router.get("/chess/puzzles/facets")
 async def puzzle_facets(
     include_drafts: bool = Query(False),
+    drafts_only: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     user: Employee = require_permission("chess:read"),
 ):
+    can_coach = _can_coach(user)
+    show_drafts = (include_drafts or drafts_only) and can_coach
     return await chess_service.puzzle_facets(
-        db, user, published_only=not (include_drafts and _can_coach(user)),
+        db, user, published_only=not show_drafts, drafts_only=(drafts_only and can_coach),
     )
 
 

@@ -61,13 +61,13 @@ export default function ChessPuzzlesPage() {
   const [ratingBand, setRatingBand] = useState("");
   const [pieceBand, setPieceBand] = useState("");
   const [sort, setSort] = useState("recent");
-  const [includeDrafts, setIncludeDrafts] = useState(false);
+  const [draftsOnly, setDraftsOnly] = useState(false);
 
   // Coach review: multi-select + per-card publish/hide.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  const opts = { search, themes: activeThemes, side, source, opening, ratingBand, pieceBand, sort, includeDrafts };
+  const opts = { search, themes: activeThemes, side, source, opening, ratingBand, pieceBand, sort, draftsOnly };
 
   const load = useCallback(
     async (p: number, o: typeof opts) => {
@@ -82,7 +82,7 @@ export default function ChessPuzzlesPage() {
         if (o.side) params.set("side", o.side);
         if (o.source) params.set("source", o.source);
         if (o.opening) params.set("opening", o.opening);
-        if (o.includeDrafts) params.set("include_drafts", "true");
+        if (o.draftsOnly) params.set("drafts_only", "true");
         const band = RATING_BANDS[o.ratingBand];
         if (band?.min != null) params.set("min_rating", String(band.min));
         if (band?.max != null) params.set("max_rating", String(band.max));
@@ -104,14 +104,14 @@ export default function ChessPuzzlesPage() {
 
   // Re-fetch whenever a non-text filter changes; search submits via the form.
   useEffect(() => {
-    load(1, { search, themes: activeThemes, side, source, opening, ratingBand, pieceBand, sort, includeDrafts });
+    load(1, { search, themes: activeThemes, side, source, opening, ratingBand, pieceBand, sort, draftsOnly });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeThemes, side, source, opening, ratingBand, pieceBand, sort, includeDrafts]);
+  }, [activeThemes, side, source, opening, ratingBand, pieceBand, sort, draftsOnly]);
 
   useEffect(() => {
-    const q = includeDrafts ? "?include_drafts=true" : "";
+    const q = draftsOnly ? "?drafts_only=true" : "";
     api<PuzzleFacets>(`/api/chess/puzzles/facets${q}`).then(setFacets).catch(() => setFacets(null));
-  }, [includeDrafts]);
+  }, [draftsOnly]);
 
   function toggleTheme(th: string) {
     setActiveThemes((prev) => (prev.includes(th) ? prev.filter((x) => x !== th) : [...prev, th]));
@@ -133,7 +133,16 @@ export default function ChessPuzzlesPage() {
         method: "PATCH",
         body: { is_published: !p.is_published },
       });
-      setPuzzles((prev) => prev.map((x) => (x.id === p.id ? { ...x, is_published: !x.is_published } : x)));
+      // Both coach views filter by publish state, so a toggled puzzle no longer
+      // matches the active filter → drop it from the list.
+      setPuzzles((prev) => prev.filter((x) => x.id !== p.id));
+      setTotal((t) => Math.max(0, t - 1));
+      setSelected((prev) => {
+        if (!prev.has(p.id)) return prev;
+        const next = new Set(prev);
+        next.delete(p.id);
+        return next;
+      });
     } catch {
       /* leave state unchanged on failure */
     }
@@ -214,8 +223,8 @@ export default function ChessPuzzlesPage() {
         )}
         {canCoach && (
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input type="checkbox" checked={includeDrafts} onChange={(e) => setIncludeDrafts(e.target.checked)} />
-            Hiện bản nháp
+            <input type="checkbox" checked={draftsOnly} onChange={(e) => setDraftsOnly(e.target.checked)} />
+            Chỉ bản nháp
           </label>
         )}
         <div className="ml-auto">

@@ -950,6 +950,7 @@ async def list_puzzles(
     source: Optional[str] = None,
     sort: str = "recent",
     published_only: bool = True,
+    drafts_only: bool = False,
     page: int = 1,
     page_size: int = 24,
 ) -> tuple[list[ChessPuzzle], int]:
@@ -964,9 +965,11 @@ async def list_puzzles(
         count_base = count_base.where(clause)
 
     conds = []
-    # Students only ever see published puzzles; coaches can opt to see drafts.
+    # Students only ever see published puzzles; coaches can opt to review drafts.
     if published_only or not _can_coach(user):
         conds.append(ChessPuzzle.is_published.is_(True))
+    elif drafts_only:
+        conds.append(ChessPuzzle.is_published.is_(False))
     if theme:
         conds.append(ChessPuzzle.themes.any(theme))
     if themes:
@@ -1005,19 +1008,24 @@ async def list_puzzles(
     return list(rows), total
 
 
-async def puzzle_facets(session: AsyncSession, user: Employee, *, published_only: bool = True) -> dict:
+async def puzzle_facets(
+    session: AsyncSession, user: Employee, *, published_only: bool = True, drafts_only: bool = False,
+) -> dict:
     """Aggregates that drive the puzzle library's filter rail (scope + publish filtered)."""
     allowed, clause = _scope_clause(ChessPuzzle, user, "read")
     if not allowed:
         return {"themes": [], "openings": [], "sources": [], "rating": None, "piece_count": None}
 
     pub = published_only or not _can_coach(user)
+    only_drafts = drafts_only and not pub and _can_coach(user)
 
     def _scoped(stmt):
         if clause is not None:
             stmt = stmt.where(clause)
         if pub:
             stmt = stmt.where(ChessPuzzle.is_published.is_(True))
+        elif only_drafts:
+            stmt = stmt.where(ChessPuzzle.is_published.is_(False))
         return stmt
 
     theme_sub = _scoped(select(func.unnest(ChessPuzzle.themes).label("theme"))).subquery()
