@@ -1436,6 +1436,14 @@ class ChessPuzzle(Base):
     themes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     rating: Mapped[Optional[int]] = mapped_column(Integer)
     popularity: Mapped[Optional[int]] = mapped_column(Integer)
+    # Number of plays — Lichess NbPlays; NULL for hand-authored puzzles.
+    nb_plays: Mapped[Optional[int]] = mapped_column(Integer)
+    # Opening name from the source database (Lichess OpeningTags, spaced).
+    opening_name: Mapped[Optional[str]] = mapped_column(String(160))
+    # Provenance: "manual" (default) | "lichess".
+    source: Mapped[Optional[str]] = mapped_column(String(20))
+    # Lichess PuzzleId — used to dedupe re-imports. Unique where not null.
+    lichess_id: Mapped[Optional[str]] = mapped_column(String(40))
     source_game_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("chess_games.id", ondelete="SET NULL"),
         nullable=True,
@@ -1464,6 +1472,8 @@ class ChessPuzzle(Base):
         Index("ix_chess_puzzles_rating", "rating"),
         Index("ix_chess_puzzles_published", "is_published"),
         UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_puzzles_scope_slug"),
+        # Dedupe Lichess re-imports; multiple NULLs stay distinct in Postgres.
+        Index("uq_chess_puzzles_lichess_id", "lichess_id", unique=True),
     )
 
 
@@ -1516,6 +1526,24 @@ class ChessPosition(Base):
     best_move: Mapped[Optional[str]] = mapped_column(String(10))
     eval_depth: Mapped[Optional[int]] = mapped_column(Integer)
     themes: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    # --- Library retrieval attributes (denormalized; filled on create/sync) ---
+    # Difficulty score — denormalized from the source puzzle's rating.
+    difficulty: Mapped[Optional[int]] = mapped_column(Integer)
+    popularity: Mapped[Optional[int]] = mapped_column(Integer)
+    nb_plays: Mapped[Optional[int]] = mapped_column(Integer)
+    # Material count — number of pieces on the board (derived from FEN).
+    piece_count: Mapped[Optional[int]] = mapped_column(Integer)
+    # Side to move ("w" | "b") — derived from FEN for fast filtering.
+    side_to_move: Mapped[Optional[str]] = mapped_column(String(1))
+    eco: Mapped[Optional[str]] = mapped_column(String(8))
+    opening_name: Mapped[Optional[str]] = mapped_column(String(160))
+    # Provenance: "manual" (default) | "game" | "puzzle".
+    source: Mapped[Optional[str]] = mapped_column(String(20))
+    # Link back to the source puzzle (solution line / re-sync). NULL for others.
+    source_puzzle_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chess_puzzles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     scope_type: Mapped[str] = mapped_column(String(20), default=ScopeType.GLOBAL.value)
     scope_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_by_employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -1533,6 +1561,12 @@ class ChessPosition(Base):
         UniqueConstraint("scope_type", "scope_id", "fen", name="uq_chess_positions_scope_fen"),
         UniqueConstraint("scope_type", "scope_id", "slug", name="uq_chess_positions_scope_slug"),
         Index("ix_chess_positions_scope", "scope_type", "scope_id"),
+        Index("ix_chess_positions_difficulty", "difficulty"),
+        Index("ix_chess_positions_piece_count", "piece_count"),
+        Index("ix_chess_positions_popularity", "popularity"),
+        Index("ix_chess_positions_eco", "eco"),
+        Index("ix_chess_positions_source", "source"),
+        Index("ix_chess_positions_themes", "themes", postgresql_using="gin"),
     )
 
 

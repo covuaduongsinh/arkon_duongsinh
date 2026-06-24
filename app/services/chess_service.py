@@ -377,6 +377,19 @@ def validate_fen(fen: str) -> str:
     return board.fen()
 
 
+def _fen_facts(fen: str) -> tuple[int, str]:
+    """Return (piece_count, side_to_move) from a FEN — for library filtering.
+
+    piece_count is the number of pieces on the board; side_to_move is "w"/"b".
+    Tolerant of unparsable input (returns (0, "w")) so it never breaks a write.
+    """
+    parts = (fen or "").split()
+    placement = parts[0] if parts else ""
+    piece_count = sum(1 for c in placement if c.isalpha())
+    side = parts[1] if len(parts) > 1 and parts[1] in ("w", "b") else "w"
+    return piece_count, side
+
+
 # ---------------------------------------------------------------------------
 # Games
 # ---------------------------------------------------------------------------
@@ -1061,6 +1074,9 @@ async def create_position(
     label: Optional[str] = None,
     description: Optional[str] = None,
     themes: Optional[list[str]] = None,
+    difficulty: Optional[int] = None,
+    eco: Optional[str] = None,
+    opening_name: Optional[str] = None,
     scope_type: Optional[str] = "global",
     scope_id: Optional[uuid.UUID] = None,
 ) -> ChessPosition:
@@ -1068,12 +1084,19 @@ async def create_position(
     s_type, s_id = resolve_scope(user, scope_type, scope_id)
     taken = await _existing_slugs(session, ChessPosition, s_type, s_id)
     slug = _dedupe_slug(slugify(label, 80) or f"position-{uuid.uuid4().hex[:8]}", taken)
+    piece_count, side = _fen_facts(norm_fen)
     pos = ChessPosition(
         fen=norm_fen,
         slug=slug,
         label=label,
         description=description,
         themes=themes or [],
+        difficulty=difficulty,
+        eco=eco,
+        opening_name=opening_name,
+        piece_count=piece_count,
+        side_to_move=side,
+        source="manual",
         scope_type=s_type,
         scope_id=s_id,
         created_by_employee_id=user.id,
@@ -1083,8 +1106,37 @@ async def create_position(
     return pos
 
 
+# Sort keys → ORDER BY clause. NULLs sort last so unrated/unscored rows don't
+# crowd the top of difficulty/popularity views.
+_POSITION_SORTS = {
+    "recent": (ChessPosition.created_at.desc(),),
+    "popularity": (ChessPosition.popularity.desc().nulls_last(), ChessPosition.created_at.desc()),
+    "difficulty_asc": (ChessPosition.difficulty.asc().nulls_last(), ChessPosition.created_at.desc()),
+    "difficulty_desc": (ChessPosition.difficulty.desc().nulls_last(), ChessPosition.created_at.desc()),
+    "pieces_asc": (ChessPosition.piece_count.asc().nulls_last(), ChessPosition.created_at.desc()),
+    "eval": (ChessPosition.eval_cp.desc().nulls_last(), ChessPosition.created_at.desc()),
+    "label": (ChessPosition.label.asc().nulls_last(),),
+}
+
+
 async def list_positions(
-    session: AsyncSession, user: Employee, *, page: int = 1, page_size: int = 50,
+    session: AsyncSession,
+    user: Employee,
+    *,
+    search: Optional[str] = None,
+    themes: Optional[list[str]] = None,
+    eco: Optional[str] = None,
+    opening: Optional[str] = None,
+    side: Optional[str] = None,
+    min_difficulty: Optional[int] = None,
+    max_difficulty: Optional[int] = None,
+    min_pieces: Optional[int] = None,
+    max_pieces: Optional[int] = None,
+    source: Optional[str] = None,
+    has_eval: Optional[bool] = None,
+    sort: str = "recent",
+    page: int = 1,
+    page_size: int = 24,
 ) -> tuple[list[ChessPosition], int]:
     allowed, clause = _scope_clause(ChessPosition, user, "read")
     if not allowed:
@@ -1094,11 +1146,95 @@ async def list_positions(
     if clause is not None:
         base = base.where(clause)
         count_base = count_base.where(clause)
+
+    conds = []
+    if search:
+        like = f"%{search}%"
+        conds.append(or_(
+            ChessPosition.label.ilike(like),
+            ChessPosition.description.ilike(like),
+            ChessPosition.slug.ilike(like),
+            ChessPosition.opening_name.ilike(like),
+        ))
+    if themes:
+        # AND semantics: the position must carry every selected theme (@>).
+        conds.append(ChessPosition.themes.contains(themes))
+    if eco:
+        conds.append(ChessPosition.eco == eco)
+    if opening:
+        conds.append(ChessPosition.opening_name.ilike(f"%{opening}%"))
+    if side in ("w", "b"):
+        conds.append(ChessPosition.side_to_move == side)
+    if min_difficulty is not None:
+        conds.append(ChessPosition.difficulty >= min_difficulty)
+    if max_difficulty is not None:
+        conds.append(ChessPosition.difficulty <= max_difficulty)
+    if min_pieces is not None:
+        conds.append(ChessPosition.piece_count >= min_pieces)
+    if max_pieces is not None:
+        conds.append(ChessPosition.piece_count <= max_pieces)
+    if source:
+        conds.append(ChessPosition.source == source)
+    if has_eval is not None:
+        conds.append(ChessPosition.eval_cp.isnot(None) if has_eval else ChessPosition.eval_cp.is_(None))
+    for c in conds:
+        base = base.where(c)
+        count_base = count_base.where(c)
+
     total = (await session.execute(count_base)).scalar() or 0
+    order = _POSITION_SORTS.get(sort, _POSITION_SORTS["recent"])
     offset = (max(page, 1) - 1) * page_size
-    stmt = base.order_by(ChessPosition.created_at.desc()).offset(offset).limit(page_size)
+    stmt = base.order_by(*order).offset(offset).limit(page_size)
     rows = (await session.execute(stmt)).scalars().all()
     return list(rows), total
+
+
+async def position_facets(session: AsyncSession, user: Employee) -> dict:
+    """Aggregates that drive the library's filter rail (scope-filtered)."""
+    allowed, clause = _scope_clause(ChessPosition, user, "read")
+    if not allowed:
+        return {"themes": [], "openings": [], "sources": [], "difficulty": None, "piece_count": None}
+
+    def _scoped(stmt):
+        return stmt.where(clause) if clause is not None else stmt
+
+    # unnest themes in a subquery, then group by the plain column (Postgres
+    # rejects GROUP BY on a set-returning function expression directly).
+    theme_sub = _scoped(select(func.unnest(ChessPosition.themes).label("theme"))).subquery()
+    theme_stmt = (
+        select(theme_sub.c.theme, func.count().label("n"))
+        .group_by(theme_sub.c.theme)
+        .order_by(func.count().desc())
+        .limit(60)
+    )
+    themes = [{"value": t, "count": n} for t, n in (await session.execute(theme_stmt)).all()]
+
+    open_stmt = (
+        _scoped(select(ChessPosition.opening_name, func.count().label("n")))
+        .where(ChessPosition.opening_name.isnot(None))
+        .group_by(ChessPosition.opening_name)
+        .order_by(func.count().desc())
+        .limit(40)
+    )
+    openings = [{"value": o, "count": n} for o, n in (await session.execute(open_stmt)).all()]
+
+    src_stmt = _scoped(select(ChessPosition.source, func.count().label("n"))).group_by(ChessPosition.source)
+    sources = [{"value": s or "manual", "count": n} for s, n in (await session.execute(src_stmt)).all()]
+
+    diff_row = (await session.execute(
+        _scoped(select(func.min(ChessPosition.difficulty), func.max(ChessPosition.difficulty)))
+    )).one()
+    pc_row = (await session.execute(
+        _scoped(select(func.min(ChessPosition.piece_count), func.max(ChessPosition.piece_count)))
+    )).one()
+
+    return {
+        "themes": themes,
+        "openings": openings,
+        "sources": sources,
+        "difficulty": {"min": diff_row[0], "max": diff_row[1]} if diff_row[0] is not None else None,
+        "piece_count": {"min": pc_row[0], "max": pc_row[1]} if pc_row[0] is not None else None,
+    }
 
 
 async def get_position(session: AsyncSession, position_id: uuid.UUID) -> Optional[ChessPosition]:
@@ -1107,8 +1243,115 @@ async def get_position(session: AsyncSession, position_id: uuid.UUID) -> Optiona
     )).scalar_one_or_none()
 
 
+async def update_position(
+    session: AsyncSession,
+    pos: ChessPosition,
+    *,
+    label: Optional[str] = None,
+    description: Optional[str] = None,
+    themes: Optional[list[str]] = None,
+    difficulty: Optional[int] = None,
+    eco: Optional[str] = None,
+    opening_name: Optional[str] = None,
+) -> ChessPosition:
+    """Patch curation fields. `slug` is intentionally left stable so existing
+    `[[position:<slug>]]` wikilinks never break. Only provided fields change."""
+    if label is not None:
+        pos.label = label
+    if description is not None:
+        pos.description = description
+    if themes is not None:
+        pos.themes = themes
+    if difficulty is not None:
+        pos.difficulty = difficulty
+    if eco is not None:
+        pos.eco = eco
+    if opening_name is not None:
+        pos.opening_name = opening_name
+    await session.flush()
+    return pos
+
+
 async def delete_position(session: AsyncSession, pos: ChessPosition) -> None:
     await session.delete(pos)
+
+
+async def sync_positions_from_puzzles(
+    session: AsyncSession,
+    *,
+    scope_type: str = "global",
+    scope_id: Optional[uuid.UUID] = None,
+    only_lichess: bool = False,
+    limit: Optional[int] = None,
+    batch_size: int = 500,
+    on_progress=None,
+) -> dict:
+    """Project puzzles into the position library — denormalized & idempotent.
+
+    Each puzzle becomes/refreshes exactly one ChessPosition linked by
+    `source_puzzle_id`; re-running updates attributes in place. A board already
+    present in the scope (same FEN, from any source) is not duplicated. The
+    puzzle's solution stays on the puzzle (read via the link) — never copied.
+    Returns {created, updated, skipped, total_puzzles}. Caller commits.
+    """
+    s_type = scope_type or "global"
+    s_id = scope_id if s_type == "department" else None
+
+    def _scope(stmt, model):
+        stmt = stmt.where(model.scope_type == s_type)
+        return stmt.where(model.scope_id == s_id) if s_id is not None else stmt.where(model.scope_id.is_(None))
+
+    taken = await _existing_slugs(session, ChessPosition, s_type, s_id)
+    existing_by_puzzle: dict[uuid.UUID, ChessPosition] = {}
+    existing_fens: set[str] = set()
+    for p in (await session.execute(_scope(select(ChessPosition), ChessPosition))).scalars().all():
+        existing_fens.add(p.fen)
+        if p.source_puzzle_id is not None:
+            existing_by_puzzle[p.source_puzzle_id] = p
+
+    pstmt = _scope(select(ChessPuzzle), ChessPuzzle)
+    if only_lichess:
+        pstmt = pstmt.where(ChessPuzzle.source == "lichess")
+    pstmt = pstmt.order_by(ChessPuzzle.created_at.asc())
+    if limit:
+        pstmt = pstmt.limit(limit)
+    puzzles = (await session.execute(pstmt)).scalars().all()
+
+    created = updated = skipped = 0
+    for i, pz in enumerate(puzzles):
+        attrs = {
+            "themes": pz.themes or [],
+            "difficulty": pz.rating,
+            "popularity": pz.popularity,
+            "nb_plays": pz.nb_plays,
+            "opening_name": pz.opening_name,
+            "side_to_move": pz.side_to_move,
+            "piece_count": _fen_facts(pz.fen)[0],
+        }
+        existing = existing_by_puzzle.get(pz.id)
+        if existing is not None:
+            for k, v in attrs.items():
+                setattr(existing, k, v)
+            updated += 1
+        elif pz.fen in existing_fens:
+            skipped += 1
+        else:
+            label = pz.title or pz.opening_name
+            slug = _dedupe_slug(slugify(label, 80) or f"position-{uuid.uuid4().hex[:8]}", taken)
+            session.add(ChessPosition(
+                fen=pz.fen, slug=slug, label=label, source="puzzle", source_puzzle_id=pz.id,
+                scope_type=s_type, scope_id=s_id, **attrs,
+            ))
+            existing_fens.add(pz.fen)
+            created += 1
+        if (i + 1) % batch_size == 0:
+            await session.flush()
+            if on_progress:
+                on_progress(i + 1, len(puzzles))
+    await session.flush()
+    if on_progress:
+        on_progress(len(puzzles), len(puzzles))
+    return {"created": created, "updated": updated, "skipped": skipped, "total_puzzles": len(puzzles)}
 
 
 # ---------------------------------------------------------------------------

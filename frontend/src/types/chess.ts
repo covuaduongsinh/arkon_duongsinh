@@ -73,6 +73,8 @@ export type PuzzleStats = {
   rating?: number;
 };
 
+export type ChessPositionSource = "manual" | "game" | "puzzle";
+
 export type ChessPosition = {
   id: string;
   slug?: string | null;
@@ -83,9 +85,28 @@ export type ChessPosition = {
   best_move?: string | null;
   eval_depth?: number | null;
   themes: string[];
+  difficulty?: number | null;
+  popularity?: number | null;
+  nb_plays?: number | null;
+  piece_count?: number | null;
+  side_to_move?: "w" | "b" | null;
+  eco?: string | null;
+  opening_name?: string | null;
+  source?: ChessPositionSource | null;
+  source_puzzle_id?: string | null;
   scope_type: ChessScopeType;
   scope_id?: string | null;
   created_at: string;
+};
+
+export type FacetCount = { value: string; count: number };
+
+export type PositionFacets = {
+  themes: FacetCount[];
+  openings: FacetCount[];
+  sources: FacetCount[];
+  difficulty: { min: number | null; max: number | null } | null;
+  piece_count: { min: number | null; max: number | null } | null;
 };
 
 export type ChessMatchMove = {
