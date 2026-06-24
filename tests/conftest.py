@@ -3,23 +3,28 @@ factory for creating authenticated users per role.
 
 Design notes
 ------------
-* The schema is built with ``Base.metadata.create_all`` against a *test* database
-  (fresh per test, dropped afterwards) so tests are isolated without depending on
-  the Alembic migration chain. Migrations are validated separately in CI
-  (``alembic upgrade head`` on an empty DB).
-* ``DATABASE_URL`` must point at a disposable database. It defaults to a local
-  ``arkon_test`` DB; CI overrides it via the environment. We set it *before*
-  importing anything under ``app`` so ``app.config.settings`` and the module-level
-  engine bind to the test DB.
+* The schema is built ONCE per session by running the real Alembic migration
+  chain (``alembic upgrade head``) against a *test* database — not
+  ``Base.metadata.create_all`` (which emits some indexes twice and can't build
+  the FTS columns added in migrations). This also means tests exercise the same
+  schema production runs.
+* Tests share the one schema and commit real data (no per-test rollback). The
+  suite is small and self-contained — fixtures use random emails / department
+  names, and assertions check specific ids rather than exact row counts — so it
+  is order-independent. CI runs against a fresh disposable DB each time.
+* ``DATABASE_URL`` must point at a disposable database (defaults to a local
+  ``arkon_test``; CI overrides it). It is set before importing ``app`` so the
+  module-level engine binds to the test DB.
 * Auth is exercised end-to-end: users are real ``Employee`` rows and tokens are
-  minted with the production ``create_access_token`` — no dependency overrides.
+  minted with the production ``create_access_token``.
 
-Run (inside the api container or any env with deps + a reachable Postgres)::
+Run (with deps installed + a reachable Postgres)::
 
     pytest tests/test_chess_api.py -q
 """
 
 import os
+import subprocess
 import uuid
 
 # Must run before any `app.*` import so settings/engine bind to the test DB.
@@ -30,33 +35,22 @@ os.environ.setdefault(
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("MCP_TOKEN_PEPPER", "test-pepper")
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
 
-from app.database import async_session_factory, engine
-from app.database.models import (
-    Base,
-    Department,
-    Employee,
-    EmployeeDepartment,
-)
+from app.database import async_session_factory
+from app.database.models import Department, Employee, EmployeeDepartment
 from app.main import app
 from app.services.auth_service import audience_for, create_access_token, hash_password
 
 
-@pytest_asyncio.fixture
-async def _schema():
-    """Create a fresh schema for each test and drop it afterwards."""
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-        await conn.run_sync(Base.metadata.create_all)
-    try:
-        yield
-    finally:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
+@pytest.fixture(scope="session")
+def _schema():
+    """Build the schema once via the real migration chain."""
+    # Same command the CI `migrations` job runs; alembic reads DATABASE_URL.
+    subprocess.run(["alembic", "upgrade", "head"], check=True)
+    yield
 
 
 @pytest_asyncio.fixture

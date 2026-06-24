@@ -26,13 +26,19 @@ START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 # ── PGN import ──────────────────────────────────────────────────────────────
 
 
+def _pgn_upload(scope_type="global", scope_id=None):
+    """Build multipart (files + data) for the PGN import endpoint."""
+    files = {"file": ("game.pgn", OPERA_PGN.encode("utf-8"), "application/octet-stream")}
+    data = {"scope_type": scope_type}
+    if scope_id is not None:
+        data["scope_id"] = str(scope_id)
+    return files, data
+
+
 async def test_import_game_as_admin(client, make_user):
     _, headers = await make_user(role="admin")
-    r = await client.post(
-        "/api/chess/games/import",
-        data={"pgn": OPERA_PGN, "scope_type": "global"},
-        headers=headers,
-    )
+    files, data = _pgn_upload()
+    r = await client.post("/api/chess/games/import", files=files, data=data, headers=headers)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["imported"] == 1
@@ -42,19 +48,14 @@ async def test_import_game_as_admin(client, make_user):
 async def test_import_game_forbidden_for_viewer(client, make_user):
     # A plain viewer has no chess:create permission.
     _, headers = await make_user(global_role="viewer")
-    r = await client.post(
-        "/api/chess/games/import",
-        data={"pgn": OPERA_PGN, "scope_type": "global"},
-        headers=headers,
-    )
+    files, data = _pgn_upload()
+    r = await client.post("/api/chess/games/import", files=files, data=data, headers=headers)
     assert r.status_code == 403
 
 
 async def test_import_requires_auth(client):
-    r = await client.post(
-        "/api/chess/games/import",
-        data={"pgn": OPERA_PGN, "scope_type": "global"},
-    )
+    files, data = _pgn_upload()
+    r = await client.post("/api/chess/games/import", files=files, data=data)
     assert r.status_code == 401
 
 
@@ -115,10 +116,8 @@ async def test_student_cannot_publish_puzzle(client, make_user):
 
 
 async def _import(client, headers, *, scope_type, scope_id=None):
-    data = {"pgn": OPERA_PGN, "scope_type": scope_type}
-    if scope_id is not None:
-        data["scope_id"] = str(scope_id)
-    r = await client.post("/api/chess/games/import", data=data, headers=headers)
+    files, data = _pgn_upload(scope_type=scope_type, scope_id=scope_id)
+    r = await client.post("/api/chess/games/import", files=files, data=data, headers=headers)
     assert r.status_code == 200, r.text
     return r.json()["items"][0]["id"]
 
